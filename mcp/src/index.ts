@@ -46,7 +46,7 @@ Use these tools instead of update_canvas for most operations — they're 10-20x 
 - **add_label(text, near_id)** — floating text near an element
 - **delete_element(id)** — removes element and bound text
 - **patch_canvas(patches)** — modify any element field without resending the full definition
-- **layout(style?)** — auto-arrange all nodes/edges (TB, LR, tree, hierarchy)
+- **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge (TB, LR, tree, hierarchy)
 
 Only use update_canvas() for new elements not covered by add_node/connect. Always send complete element definitions to update_canvas — partial objects break elements.
 
