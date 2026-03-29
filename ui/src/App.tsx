@@ -164,6 +164,9 @@ function App(): React.JSX.Element {
       <Excalidraw
         excalidrawAPI={handleAPI}
         onChange={handleChange}
+        initialData={{
+          appState: { zoom: { value: 1.01 } },
+        }}
       />
     </div>
   );

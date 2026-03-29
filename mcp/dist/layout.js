@@ -24,7 +24,7 @@ export function layoutCanvas(wss, style = "TB", rootId) {
     g.setGraph({
         rankdir,
         nodesep: 60,
-        ranksep: 80,
+        ranksep: 120,
         marginx: LAYOUT_MARGIN,
         marginy: LAYOUT_MARGIN,
     });
@@ -67,6 +67,93 @@ export function layoutCanvas(wss, style = "TB", rootId) {
                     const textEl = elemById.get(bound.id);
                     if (textEl) {
                         patches.push({ id: bound.id, x: textEl.x + dx, y: textEl.y + dy });
+                    }
+                }
+            }
+        }
+    }
+    // Recompute arrow positions based on new node positions.
+    // Build a map of new node positions (after layout patches applied).
+    const newPos = new Map();
+    for (const nodeId of g.nodes()) {
+        const layoutNode = g.node(nodeId);
+        const el = elemById.get(nodeId);
+        if (!layoutNode || !el)
+            continue;
+        newPos.set(nodeId, {
+            x: layoutNode.x - el.width / 2,
+            y: layoutNode.y - el.height / 2,
+            w: el.width,
+            h: el.height,
+        });
+    }
+    // Update each arrow that has bindings to repositioned nodes.
+    for (const el of elements) {
+        if (el.type !== "arrow")
+            continue;
+        const startId = el.startBinding?.elementId;
+        const endId = el.endBinding?.elementId;
+        const startPos = startId ? newPos.get(startId) : undefined;
+        const endPos = endId ? newPos.get(endId) : undefined;
+        if (!startPos && !endPos)
+            continue;
+        // Compute arrow from source edge to target edge.
+        const fromCx = startPos ? startPos.x + startPos.w / 2 : el.x;
+        const fromCy = startPos ? startPos.y + startPos.h / 2 : el.y;
+        const pts = el.points;
+        const toCx = endPos ? endPos.x + endPos.w / 2 : el.x + (pts?.[1]?.[0] ?? 0);
+        const toCy = endPos ? endPos.y + endPos.h / 2 : el.y + (pts?.[1]?.[1] ?? 0);
+        const rawDx = toCx - fromCx;
+        const rawDy = toCy - fromCy;
+        // Determine primary direction and compute edge-to-edge points.
+        let startX, startY, endX, endY;
+        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
+            // Horizontal: right edge of source → left edge of target (or vice versa).
+            if (rawDx >= 0) {
+                startX = startPos ? startPos.x + startPos.w : fromCx;
+                endX = endPos ? endPos.x : toCx;
+            }
+            else {
+                startX = startPos ? startPos.x : fromCx;
+                endX = endPos ? endPos.x + endPos.w : toCx;
+            }
+            startY = fromCy;
+            endY = toCy;
+        }
+        else {
+            // Vertical: bottom edge of source → top edge of target (or vice versa).
+            if (rawDy >= 0) {
+                startY = startPos ? startPos.y + startPos.h : fromCy;
+                endY = endPos ? endPos.y : toCy;
+            }
+            else {
+                startY = startPos ? startPos.y : fromCy;
+                endY = endPos ? endPos.y + endPos.h : toCy;
+            }
+            startX = fromCx;
+            endX = toCx;
+        }
+        const dx = endX - startX;
+        const dy = endY - startY;
+        patches.push({
+            id: el.id,
+            x: startX,
+            y: startY,
+            width: Math.abs(dx),
+            height: Math.abs(dy),
+            points: [[0, 0], [dx, dy]],
+        });
+        // Also reposition the arrow's bound text label if it has one.
+        if (el.boundElements) {
+            for (const bound of el.boundElements) {
+                if (bound.type === "text") {
+                    const textEl = elemById.get(bound.id);
+                    if (textEl) {
+                        patches.push({
+                            id: bound.id,
+                            x: fromCx + dx / 2 - textEl.width / 2,
+                            y: fromCy + dy / 2 - textEl.height / 2,
+                        });
                     }
                 }
             }
