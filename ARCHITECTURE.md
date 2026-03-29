@@ -445,3 +445,27 @@ Adapt the `session_id`, `webhook_url`, and export path for your framework.
 **Animation via rapid patches.** Excalidraw has no native animation API. The server interpolates properties and pushes `canvas_patch` messages at ~30fps. The browser receives standard patches — no animation-specific code needed.
 
 **Session model is agent-initiated.** The agent calls `start_session` with its channel identifier. Napkin doesn't know about Slack or WhatsApp — it just echoes the session_id in webhook payloads. The agent handles routing.
+
+---
+
+## Known issues and next steps
+
+### Text rendering (blocker for Phase 3)
+
+Excalidraw's `updateScene()` does not trigger font measurement on text elements. Text renders with incorrect bounding boxes (wrong width/height centered within containers) until the user clicks the element, which triggers an internal recalculation.
+
+This affects ALL programmatic text creation — JSON via `updateScene`, `canvas_patch`, `canvas_replace`, and even `loadFromBlob`. Six different approaches were tried and failed (see SAM memory `e218f617`).
+
+**Root cause:** Only Excalidraw's own element creation pipeline (the code path used when a human draws) produces correct text metrics. The API does not expose this pipeline.
+
+**Proposed fix:** Browser-side element creation. The MCP server sends a "create element" request via WebSocket. The browser uses Excalidraw's internal APIs to create the element with correct font metrics, then sends the result back to the server for caching. Same architecture as browser-side export.
+
+**Shapes are not affected** — rectangles, ellipses, diamonds, arrows all render correctly via `updateScene`. Only text elements (standalone and bound-inside-containers) have this issue.
+
+### Phase status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1 | Complete | MCP server, WebSocket sync, spatial analysis, thought bubbles, vision, animation, sessions, webhooks, export |
+| Phase 2 | Partially complete | Intent API, patch_canvas, layout, change_summary, trigger filtering all working. Text rendering quality blocked. |
+| Phase 3 | Not started | Browser-side element creation to fix text rendering |
