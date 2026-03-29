@@ -57,7 +57,17 @@ const LABEL_DEFAULTS = {
 
 const DEFAULT_NODE_WIDTH = 160;
 const DEFAULT_NODE_HEIGHT = 60;
+const NODE_PADDING = 24;
 const SPACING = 30;
+
+/**
+ * Estimate text width in pixels. Rough approximation since we don't have
+ * browser font metrics. Uses average character width for fontFamily 5.
+ */
+function estimateTextWidth(text: string, fontSize: number): number {
+  // Average character width is roughly 0.55× fontSize for Excalidraw's default font.
+  return text.length * fontSize * 0.55;
+}
 
 /** Generate a fractional index for element ordering. */
 let indexCounter = Date.now() % 100000;
@@ -171,7 +181,10 @@ export function addNode(
   const nodeId = genId();
   const textId = genId();
   const type = shapeType(shape);
-  const w = DEFAULT_NODE_WIDTH;
+  // Auto-expand container to fit label text.
+  const textWidth = estimateTextWidth(label, TEXT_DEFAULTS.fontSize);
+  const minWidth = textWidth + NODE_PADDING * 2;
+  const w = Math.max(DEFAULT_NODE_WIDTH, Math.ceil(minWidth / 10) * 10);
   const h = DEFAULT_NODE_HEIGHT;
   const pos = findOpenSpace(elements, w, h, near);
   const now = Date.now();
@@ -427,13 +440,17 @@ export function addLabel(
   if (!ref) return { error: `Element "${nearId}" not found.` };
   const labelId = genId();
   const now = Date.now();
+  const labelWidth = Math.max(100, estimateTextWidth(text, LABEL_DEFAULTS.fontSize) + 10);
+  const labelHeight = 20;
+  // Find non-overlapping position near the reference element.
+  const pos = findOpenSpace(elements, labelWidth, labelHeight, nearId);
   const label: ExcalidrawElement = {
     id: labelId,
     type: "text",
-    x: ref.x + ref.width + 10,
-    y: ref.y,
-    width: 200,
-    height: 20,
+    x: pos.x,
+    y: pos.y,
+    width: labelWidth,
+    height: labelHeight,
     ...LABEL_DEFAULTS,
     angle: 0,
     seed: Math.floor(Math.random() * 100000),

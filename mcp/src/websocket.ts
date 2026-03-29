@@ -526,7 +526,16 @@ export class CanvasWebSocketServer extends EventEmitter {
     }
     // Type-specific dimension defaults.
     if (r.width === undefined) {
-      r.width = (el.type === "text") ? 100 : 160;
+      if (el.type === "text") {
+        // Estimate width from text content. Average char width ≈ 0.55× fontSize.
+        const fontSize = (r.fontSize as number) ?? 16;
+        const text = (r.text as string) ?? "";
+        const lines = text.split("\n");
+        const maxLineLen = Math.max(...lines.map((l: string) => l.length));
+        r.width = Math.max(10, Math.ceil(maxLineLen * fontSize * 0.55));
+      } else {
+        r.width = 160;
+      }
     }
     if (r.height === undefined) {
       if (el.type === "text") {
