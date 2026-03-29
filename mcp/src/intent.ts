@@ -32,7 +32,7 @@ const ARROW_DEFAULTS = {
 
 const TEXT_DEFAULTS = {
   fontSize: 16,
-  fontFamily: 1,
+  fontFamily: 5,
   textAlign: "center" as const,
   verticalAlign: "middle" as const,
   autoResize: true,
@@ -48,7 +48,7 @@ const LABEL_DEFAULTS = {
   roughness: 0,
   opacity: 100,
   fontSize: 14,
-  fontFamily: 1,
+  fontFamily: 5,
   textAlign: "left" as const,
   verticalAlign: "top" as const,
   autoResize: true,

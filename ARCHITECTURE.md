@@ -448,24 +448,29 @@ Adapt the `session_id`, `webhook_url`, and export path for your framework.
 
 ---
 
-## Known issues and next steps
+## Known issues and workarounds
 
-### Text rendering (blocker for Phase 3)
+### Excalidraw DPR rendering bug at zoom 1.0
 
-Excalidraw's `updateScene()` does not trigger font measurement on text elements. Text renders with incorrect bounding boxes (wrong width/height centered within containers) until the user clicks the element, which triggers an internal recalculation.
+Excalidraw 0.18.0 has a rendering bug at exactly `zoom.value === 1.0` on Retina/HiDPI displays. All elements (shapes and text) render with poor antialiasing — the canvas appears blurry or rough. At any other zoom value (0.99, 1.01, 1.1, etc.) rendering is crisp.
 
-This affects ALL programmatic text creation — JSON via `updateScene`, `canvas_patch`, `canvas_replace`, and even `loadFromBlob`. Six different approaches were tried and failed (see SAM memory `e218f617`).
+**Root cause:** On init, Excalidraw sets `appState.width/height` from `window.innerWidth/innerHeight`, then `updateDOMRect` corrects to the container's `getBoundingClientRect`. The `ShapeCache` (a `WeakMap` keyed by element reference) retains shapes rendered at the initial wrong dimensions. The `onResize` handler clears `ShapeCache` but doesn't fire on init. At zoom !== 1.0, a different code path triggers proper DPR scaling.
 
-**Root cause:** Only Excalidraw's own element creation pipeline (the code path used when a human draws) produces correct text metrics. The API does not expose this pipeline.
+**Workaround:** Set initial zoom to 1.01 to avoid exactly 1.0:
 
-**Proposed fix:** Browser-side element creation. The MCP server sends a "create element" request via WebSocket. The browser uses Excalidraw's internal APIs to create the element with correct font metrics, then sends the result back to the server for caching. Same architecture as browser-side export.
+```tsx
+<Excalidraw initialData={{ appState: { zoom: { value: 1.01 } } }} />
+```
 
-**Shapes are not affected** — rectangles, ellipses, diamonds, arrows all render correctly via `updateScene`. Only text elements (standalone and bound-inside-containers) have this issue.
+This was initially misdiagnosed as a text font measurement issue. The visual roughness affected ALL elements equally — text AND shapes — which ruled out font metrics as the cause. Key diagnostic: manually drawn elements looked identical to programmatic ones; zooming to 110% fixed everything.
+
+### Layout arrow repositioning
+
+After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge based on new node positions. Excalidraw does not automatically reposition bound arrows when nodes move via `updateScene` — only interactive drag operations trigger arrow following.
 
 ### Phase status
 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 | Complete | MCP server, WebSocket sync, spatial analysis, thought bubbles, vision, animation, sessions, webhooks, export |
-| Phase 2 | Partially complete | Intent API, patch_canvas, layout, change_summary, trigger filtering all working. Text rendering quality blocked. |
-| Phase 3 | Not started | Browser-side element creation to fix text rendering |
+| Phase 2 | Complete | Intent API, patch_canvas, layout (with arrow repositioning), change_summary, trigger filtering, DPR workaround |

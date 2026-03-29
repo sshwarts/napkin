@@ -553,7 +553,7 @@ export class CanvasWebSocketServer extends EventEmitter {
       if (r.lineHeight === undefined) r.lineHeight = 1.25;
       if (r.autoResize === undefined) r.autoResize = true;
       if (r.fontSize === undefined) r.fontSize = 16;
-      if (r.fontFamily === undefined) r.fontFamily = parseInt(process.env.NAPKIN_DEFAULT_FONT_FAMILY ?? "1", 10);
+      if (r.fontFamily === undefined) r.fontFamily = parseInt(process.env.NAPKIN_DEFAULT_FONT_FAMILY ?? "5", 10);
       if (r.textAlign === undefined) r.textAlign = "left";
       if (r.verticalAlign === undefined) r.verticalAlign = "top";
     }

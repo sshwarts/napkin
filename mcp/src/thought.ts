@@ -159,7 +159,7 @@ export function addThoughtBubble(
     text: prefixedContent,
     originalText: prefixedContent,
     fontSize: 14,
-    fontFamily: 1,
+    fontFamily: 5,
     textAlign: "center",
     verticalAlign: "middle",
     containerId,

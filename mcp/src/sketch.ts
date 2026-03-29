@@ -319,7 +319,7 @@ export async function describeElements(
     text: description,
     originalText: description,
     fontSize: 14,
-    fontFamily: 1,
+    fontFamily: 5,
     textAlign: "left",
     verticalAlign: "top",
     containerId: null,
