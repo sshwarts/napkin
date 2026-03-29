@@ -512,10 +512,44 @@ export class CanvasWebSocketServer extends EventEmitter {
    */
   private applyDefaults(el: ExcalidrawElement): void {
     const r = el as Record<string, unknown>;
+    // Auto-generate ID if missing.
+    if (!r.id) {
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let id = "";
+      for (let i = 0; i < 20; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+      r.id = id;
+    }
     // Generate index if missing.
     if (!r.index) {
       this.m_indexCounter++;
       r.index = `a${this.m_indexCounter.toString(36)}`;
+    }
+    // Type-specific dimension defaults.
+    if (r.width === undefined) {
+      r.width = (el.type === "text") ? 100 : 160;
+    }
+    if (r.height === undefined) {
+      if (el.type === "text") {
+        const fontSize = (r.fontSize as number) ?? 16;
+        const lineHeight = (r.lineHeight as number) ?? 1.25;
+        const text = (r.text as string) ?? "";
+        const lineCount = Math.max(1, text.split("\n").length);
+        r.height = fontSize * lineHeight * lineCount;
+      } else if (el.type === "diamond") {
+        r.height = 100;
+      } else {
+        r.height = 60;
+      }
+    }
+    // Type-specific roundness defaults.
+    if (r.roundness === undefined) {
+      if (el.type === "rectangle" || el.type === "diamond" || el.type === "ellipse") {
+        r.roundness = { type: 3 };
+      } else if (el.type === "arrow" || el.type === "line") {
+        r.roundness = { type: 2 };
+      } else {
+        r.roundness = null;
+      }
     }
     // Common defaults — apply to all element types.
     const common: Record<string, unknown> = {
@@ -530,7 +564,6 @@ export class CanvasWebSocketServer extends EventEmitter {
       updated: Date.now(),
       link: null,
       locked: false,
-      roundness: null,
       roughness: 0,
       opacity: 100,
       strokeWidth: 2,

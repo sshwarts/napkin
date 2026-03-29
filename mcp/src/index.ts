@@ -84,16 +84,18 @@ If you set a webhook URL (via start_session), triggers are POSTed as JSON with:
 
 ## update_canvas: server fills defaults
 When using update_canvas() for new elements, you only need to send the fields that matter. The server auto-fills all missing fields with type-aware defaults. A minimal element needs just:
-- id, type, x, y, width, height (required)
+- type, x, y (required)
+- id (optional — auto-generated if missing)
+- width, height (optional — type-specific defaults: rectangle/ellipse 160×60, diamond 160×100, text auto-computed)
 - strokeColor, backgroundColor (optional — defaults to black stroke, transparent fill)
 - text (for text elements)
 
-Example — a teal circle in 123 bytes:
-  { "id": "body", "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "strokeColor": "#0d9488", "backgroundColor": "#0d9488" }
+Example — a teal circle in 82 bytes:
+  { "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "backgroundColor": "#0d9488" }
 
-The server fills: angle, seed, version, index, roundness, opacity, strokeWidth, fillStyle, strokeStyle, groupIds, boundElements, frameId, link, locked, and type-specific fields (lineHeight/autoResize/fontFamily for text, points/arrowheads for arrows).
+The server fills: id, angle, seed, version, index, roundness (type-aware: rounded corners for shapes, smooth curves for arrows), opacity, strokeWidth, fillStyle, strokeStyle, groupIds, boundElements, frameId, link, locked, and type-specific fields (lineHeight/autoResize/fontFamily for text, points/arrowheads for arrows).
 
-**Text elements:** Do NOT set fontFamily, width, or height — let the server default them. The server uses fontFamily 5 (Excalidraw's current default font) and calculates height from fontSize * lineHeight * lineCount. Setting wrong fontFamily or width values causes text to render with incorrect metrics. Just send: id, type, x, y, text, fontSize.
+**Text elements:** Do NOT set fontFamily, width, or height — let the server default them. The server uses fontFamily 5 (Excalidraw's current default font) and calculates height from fontSize * lineHeight * lineCount. Setting wrong fontFamily or width values causes text to render with incorrect metrics. Just send: type, x, y, text, fontSize.
 
 For modifying existing elements, use patch_canvas() or the intent tools (move, resize, style) instead.`;
 
