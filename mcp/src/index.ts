@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 import { CanvasWebSocketServer } from "./websocket.js";
 import { SessionManager } from "./session.js";
 import { registerTools } from "./tools.js";
@@ -28,7 +29,17 @@ let sharedSessionManager: SessionManager;
 /**
  * Create and configure an MCP server instance with all tools registered.
  */
-const SERVER_INSTRUCTIONS = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
+const SERVER_INSTRUCTIONS_COMPACT = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
+
+Core operating rules:
+1. Call start_session() first with your conversation identifier as session_id and your webhook URL. Use compact_triggers: true.
+2. Prefer intent APIs (add_node, connect, move, resize, style, patch_canvas, apply_intents) over raw JSON construction.
+3. On webhook triggers, use changed_element_ids + changed_elements/changed_elements_compact directly; avoid unnecessary round-trips.
+4. For compact trigger payloads, set compact_triggers: true in start_session.
+
+Need full guidance/examples? Call get_server_instructions({ verbose: true }).`;
+
+const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
 
 ## Getting started
 1. Call start_session() with your conversation identifier (e.g. your chat JID or channel ID) as session_id, and a webhook_url where canvas events should be POSTed. Set compact_triggers: true to reduce webhook payload size. This ensures triggers route back to the correct conversation.
@@ -46,6 +57,7 @@ Use these tools instead of update_canvas for most operations — they're 10-20x 
 - **add_label(text, near_id, metadata?)** — floating text near an element
 - **delete_element(id)** — removes element and bound text
 - **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
+- **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs and reduces round-trip overhead for multi-step flows.
 - **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge (TB, LR, tree, hierarchy)
 
 Only use update_canvas() for new elements not covered by add_node/connect. Pass elements as an array of objects (not a JSON-encoded string). Always send complete element definitions to update_canvas — partial objects break elements.
@@ -53,6 +65,8 @@ Only use update_canvas() for new elements not covered by add_node/connect. Pass 
 ## Other tools
 - **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
 - **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties, and metadata (from customData) when present.
+- **Compact reads**: get_canvas_summary() returns nodes/edges only. Node types use the same vocabulary as get_canvas (box, ellipse, diamond). Cheapest mode: include_metadata=false and include_status=false.
+- **Path traversal**: trace_path() returns BFS paths/visited nodes from a start node (id or label) with downstream/upstream/both traversal and optional filters. V1 is read-only.
 - **Efficient deltas**: Trigger payloads include changed_element_ids, changed_elements (full data), and change_summary (human-readable). Use these instead of calling get_canvas_diff.
 - **Vision**: describe_elements() renders element(s) to PNG and sends to a vision model. Only available when ANTHROPIC_API_KEY is configured.
 - **Animation**: animate_element() interpolates properties at ~30fps. Use commit parameter for atomic final state.
@@ -77,6 +91,7 @@ If you set a webhook URL (via start_session), triggers are POSTed as JSON with:
 ## Token efficiency
 - **Show before think**: On a webhook trigger, your first action should be add_thought_bubble() to acknowledge the human's change visually. Then process. The user sees immediate feedback while you reason.
 - Use changed_elements from the webhook payload instead of calling get_canvas() or get_canvas_diff() — the data is already there.
+- Use apply_intents() for multi-step construction or animation cycles to minimize per-call protocol overhead.
 - Use animate_element with commit to combine animation + position update in one call.
 - Ignore triggers with source "reconnect" — these are browser reconnection events, not human edits. Don't poll or read the canvas on reconnect unless you need to verify state.
 - Call end_session() when the whiteboarding is done. Don't leave sessions open indefinitely — they generate reconnect triggers on every browser refresh.
@@ -99,14 +114,32 @@ The server fills: id, angle, seed, version, index, roundness (type-aware: rounde
 
 For modifying existing elements, use patch_canvas() or the intent tools (move, resize, style) instead.`;
 
+function getServerInstructions(verbose: boolean): string {
+  if (verbose) return SERVER_INSTRUCTIONS_VERBOSE;
+  const profile = (process.env.NAPKIN_INSTRUCTIONS_PROFILE ?? "compact").toLowerCase();
+  if (profile === "verbose") return SERVER_INSTRUCTIONS_VERBOSE;
+  return SERVER_INSTRUCTIONS_COMPACT;
+}
+
 function buildMcpServer(wss: CanvasWebSocketServer): McpServer {
+  const instructions = getServerInstructions(false);
   const server = new McpServer({
     name: "napkin",
     version: "0.1.0",
   }, {
-    instructions: SERVER_INSTRUCTIONS,
+    instructions,
   });
   registerTools(server, wss, sharedSessionManager);
+  server.tool(
+    "get_server_instructions",
+    "Return compact or verbose server instructions for agent guidance.",
+    {
+      verbose: z.boolean().optional().describe("Return verbose onboarding/debug instructions (default: false)"),
+    },
+    async ({ verbose }) => ({
+      content: [{ type: "text" as const, text: getServerInstructions(Boolean(verbose)) }],
+    })
+  );
   return server;
 }
 

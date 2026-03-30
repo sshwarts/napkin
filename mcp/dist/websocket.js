@@ -30,6 +30,12 @@ export class CanvasWebSocketServer extends EventEmitter {
     m_pendingExports = new Map();
     /** Counter for auto-generating fractional indices. */
     m_indexCounter = Date.now() % 100000;
+    /** Batch broadcast nesting depth. */
+    m_batchBroadcastDepth = 0;
+    /** Pending element patch entries during a deferred batch. */
+    m_pendingBatchPatchById = new Map();
+    /** Whether clear_canvas occurred during the current deferred batch. */
+    m_pendingBatchReplace = false;
     static ECHO_SUPPRESS_MS = 2000;
     /** Timestamp of last server-initiated canvas_replace (reconnect hydration). */
     m_lastReplaceSentAt = 0;
@@ -87,6 +93,40 @@ export class CanvasWebSocketServer extends EventEmitter {
         console.error(`[napkin] WebSocket server listening on port ${this.m_port}`);
     }
     /**
+     * Begin deferred broadcast mode. Element writes still update server state
+     * immediately, but browser patches are coalesced until flush/end.
+     */
+    beginBatchBroadcast() {
+        this.m_batchBroadcastDepth += 1;
+    }
+    /**
+     * Flush pending deferred writes to the browser while keeping deferred mode active.
+     * Useful as an animation barrier in apply_intents.
+     */
+    flushBatchBroadcast() {
+        if (this.m_batchBroadcastDepth <= 0)
+            return;
+        this.flushPendingBatchMessages();
+    }
+    /**
+     * End deferred broadcast mode. When the outermost batch ends, pending writes
+     * are emitted as a coalesced patch/replace.
+     */
+    endBatchBroadcast() {
+        if (this.m_batchBroadcastDepth <= 0)
+            return;
+        this.m_batchBroadcastDepth -= 1;
+        if (this.m_batchBroadcastDepth === 0) {
+            this.flushPendingBatchMessages();
+        }
+    }
+    /**
+     * Return true when deferred broadcast mode is active.
+     */
+    isBatchBroadcasting() {
+        return this.m_batchBroadcastDepth > 0;
+    }
+    /**
      * Return the current cached canvas elements as JSON string.
      */
     getCanvasRaw() {
@@ -105,6 +145,11 @@ export class CanvasWebSocketServer extends EventEmitter {
         this.m_state.elements = [];
         this.m_state.appState = null;
         this.m_state.lastUpdated = Date.now();
+        if (this.isBatchBroadcasting()) {
+            this.m_pendingBatchReplace = true;
+            this.m_pendingBatchPatchById.clear();
+            return;
+        }
         const replace = { type: "canvas_replace", elements: [] };
         this.broadcast(replace);
     }
@@ -138,8 +183,7 @@ export class CanvasWebSocketServer extends EventEmitter {
         }
         if (patched.length > 0) {
             this.m_state.lastUpdated = now;
-            const patchMsg = { type: "canvas_patch", elements: patched };
-            this.broadcast(patchMsg);
+            this.broadcastOrQueuePatch(patched);
         }
         return notFound;
     }
@@ -168,8 +212,7 @@ export class CanvasWebSocketServer extends EventEmitter {
         }
         this.m_state.elements = merged;
         this.m_state.lastUpdated = Date.now();
-        const patch = { type: "canvas_patch", elements };
-        this.broadcast(patch);
+        this.broadcastOrQueuePatch(elements);
     }
     /**
      * Return the number of connected browser clients.
@@ -677,6 +720,42 @@ export class CanvasWebSocketServer extends EventEmitter {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(payload);
             }
+        }
+    }
+    /**
+     * Broadcast immediately or enqueue patch entries for deferred batch flush.
+     */
+    broadcastOrQueuePatch(elements) {
+        if (!this.isBatchBroadcasting()) {
+            const patch = { type: "canvas_patch", elements };
+            this.broadcast(patch);
+            return;
+        }
+        for (const el of elements) {
+            this.m_pendingBatchPatchById.set(el.id, el);
+        }
+    }
+    /**
+     * Flush deferred batch writes as a single replace or patch message.
+     */
+    flushPendingBatchMessages() {
+        if (this.m_pendingBatchReplace) {
+            const replace = {
+                type: "canvas_replace",
+                elements: this.m_state.elements,
+            };
+            this.broadcast(replace);
+            this.m_pendingBatchReplace = false;
+            this.m_pendingBatchPatchById.clear();
+            return;
+        }
+        if (this.m_pendingBatchPatchById.size > 0) {
+            const patch = {
+                type: "canvas_patch",
+                elements: Array.from(this.m_pendingBatchPatchById.values()),
+            };
+            this.broadcast(patch);
+            this.m_pendingBatchPatchById.clear();
         }
     }
 }

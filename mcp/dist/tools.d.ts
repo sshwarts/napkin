@@ -1,10 +1,10 @@
 /**
  * @file MCP tool implementations for Napkin.
  *
- * 25 tools organized by category:
- * Read: get_canvas, get_canvas_diff, get_canvas_raw, get_pending_triggers
+ * 26 tools organized by category:
+ * Read: get_canvas, get_canvas_summary, get_canvas_diff, get_canvas_raw, get_pending_triggers
  * Intent API: add_node, connect, move, resize, style, add_label, delete_element
- * Write: patch_canvas, update_canvas, clear_canvas
+ * Write: patch_canvas, update_canvas, clear_canvas, apply_intents
  * Layout: layout
  * Thought bubbles: add/confirm/dismiss/list_thought_bubble(s)
  * Vision: describe_elements, describe_sketch (requires API key)

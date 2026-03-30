@@ -25,6 +25,12 @@ export declare class CanvasWebSocketServer extends EventEmitter {
     private m_pendingExports;
     /** Counter for auto-generating fractional indices. */
     private m_indexCounter;
+    /** Batch broadcast nesting depth. */
+    private m_batchBroadcastDepth;
+    /** Pending element patch entries during a deferred batch. */
+    private m_pendingBatchPatchById;
+    /** Whether clear_canvas occurred during the current deferred batch. */
+    private m_pendingBatchReplace;
     private static readonly ECHO_SUPPRESS_MS;
     /** Timestamp of last server-initiated canvas_replace (reconnect hydration). */
     private m_lastReplaceSentAt;
@@ -42,6 +48,25 @@ export declare class CanvasWebSocketServer extends EventEmitter {
      * Start the WebSocket server.
      */
     start(): void;
+    /**
+     * Begin deferred broadcast mode. Element writes still update server state
+     * immediately, but browser patches are coalesced until flush/end.
+     */
+    beginBatchBroadcast(): void;
+    /**
+     * Flush pending deferred writes to the browser while keeping deferred mode active.
+     * Useful as an animation barrier in apply_intents.
+     */
+    flushBatchBroadcast(): void;
+    /**
+     * End deferred broadcast mode. When the outermost batch ends, pending writes
+     * are emitted as a coalesced patch/replace.
+     */
+    endBatchBroadcast(): void;
+    /**
+     * Return true when deferred broadcast mode is active.
+     */
+    isBatchBroadcasting(): boolean;
     /**
      * Return the current cached canvas elements as JSON string.
      */
@@ -115,5 +140,13 @@ export declare class CanvasWebSocketServer extends EventEmitter {
      */
     private applyDefaults;
     private broadcast;
+    /**
+     * Broadcast immediately or enqueue patch entries for deferred batch flush.
+     */
+    private broadcastOrQueuePatch;
+    /**
+     * Flush deferred batch writes as a single replace or patch message.
+     */
+    private flushPendingBatchMessages;
 }
 //# sourceMappingURL=websocket.d.ts.map

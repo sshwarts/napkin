@@ -78,15 +78,18 @@ napkin/
 
 ---
 
-## MCP tools (25)
+## MCP tools (27)
 
 ### Read
 | Tool | Purpose |
 |------|---------|
 | `get_canvas` | Spatially analyzed canvas — nodes, edges, zones, thought bubbles, sketches |
+| `get_canvas_summary` | Ultra-compact graph view — nodes/edges only, no zones/sketches/properties/coordinates |
+| `trace_path` | Traverse downstream/upstream/both graph paths from a start node (id or label), with optional filters and depth limits |
 | `get_canvas_raw` | Raw Excalidraw JSON element array |
 | `get_canvas_diff` | Elements changed since a given timestamp — efficient delta polling |
 | `get_pending_triggers` | Poll for pending triggers (pull mode) |
+| `get_server_instructions` | Return compact or verbose server instructions for agent onboarding/debug |
 
 ### Write (Intent API)
 | Tool | Purpose |
@@ -100,6 +103,7 @@ napkin/
 | `delete_element` | Delete element and its bound text |
 | `patch_canvas` | Modify existing elements with partial patches (array input, not JSON string) — 10-20x smaller than full updates |
 | `update_canvas` | Add new elements with full definitions (array input, not JSON string). Use intent API for modifications |
+| `apply_intents` | Execute ordered intent/write operations in one call. Supports `$ref:name.field`, `cancel_on_error`, and deferred broadcast mode for reduced call overhead |
 | `clear_canvas` | Remove all elements |
 
 ### Layout
@@ -184,6 +188,15 @@ Typical agent workflow: `add_node` → `connect` → `layout` → `style` tweaks
 - **Metadata** — `customData` from Excalidraw elements is exposed as `metadata` on nodes and edges when present. Set via `add_node(metadata: {...})` or `patch_canvas([{ id, customData: {...} }])`. Conventions: `intent`, `notes`, `status` (wip|review|done|parking_lot), `owner`.
 
 No coordinates are exposed to the agent. The output is purely semantic.
+
+For cheap reasoning passes, use `get_canvas_summary()`:
+- Nodes: `id`, `label`, `type` (same type vocabulary as `get_canvas`: `box`, `ellipse`, `diamond`)
+- Edges: `id`, `from`, `to`, optional `label`
+- Optional node fields: `status`, `metadata`
+
+Floor mode: `get_canvas_summary({ include_metadata: false, include_status: false })` returns only `id/label/type/from/to` as the lowest-overhead read.
+
+`trace_path()` is a read-only traversal tool (V1): it returns `start_nodes`, `nodes_visited_order`, `traversed_edges`, and `paths` (each path includes its `start_node`), with truncation metadata. Ambiguous label handling is controlled via `on_ambiguous` (`error|first|all`). Metadata filtering uses partial match semantics: all specified keys must match, extra metadata keys are allowed.
 
 ---
 
@@ -287,6 +300,7 @@ All configuration is via environment variables. Nothing is required except `ANTH
 | `NAPKIN_TRIGGER_WEBHOOK` | — | URL to POST triggers to (unset = pull-only) |
 | `NAPKIN_COMPACT_TRIGGERS` | `false` | Use compact trigger payloads (`changed_elements_compact`) by default |
 | `NAPKIN_TRIGGER_INCLUDE_CANVAS` | `false` | Include structured canvas in webhook payload |
+| `NAPKIN_INSTRUCTIONS_PROFILE` | `compact` | Server `initialize.instructions` profile: `compact` or `verbose` |
 | `NAPKIN_SESSION_TTL_MS` | `7200000` | Session auto-expire after inactivity (ms) |
 | `NAPKIN_SESSION_PATH` | `~/.napkin/sessions.json` | Session persistence file path |
 | `NAPKIN_EXPORT_DIR` | — | Base directory for relative export paths (e.g. `/Users/scotts/Perry/napkin`) |
@@ -383,7 +397,7 @@ Port 3200 is registered automatically. The webhook channel starts even without `
 
 ## Agent instructions
 
-The MCP server sends instructions to agents on `initialize` (the `instructions` field in the server info response). These cover tool usage, sessions, triggers, and deltas. However, **the webhook URL is framework-specific** — Napkin can't tell the agent where to send triggers.
+The MCP server sends instructions to agents on `initialize` (the `instructions` field in the server info response). The default profile is compact (core operating rules only). Set `NAPKIN_INSTRUCTIONS_PROFILE=verbose` for full onboarding text, or call `get_server_instructions({ verbose: true })` on demand. However, **the webhook URL is framework-specific** — Napkin can't tell the agent where to send triggers.
 
 Each agent framework must tell its agents the webhook URL in its own instructions:
 
