@@ -55,7 +55,7 @@ function lerpColor(from, to, t) {
  * Animate a single element from its current state to the target properties.
  * Resolves when the animation completes.
  */
-export function animateElement(wss, elementId, target, durationMs, easing = "linear", commit) {
+export function animateElement(wss, elementId, target, durationMs, easing = "linear", commit, originSessionId) {
     return new Promise((resolve) => {
         const elements = wss.getCanvasElements();
         const element = elements.find((el) => el.id === elementId);
@@ -125,7 +125,7 @@ export function animateElement(wss, elementId, target, durationMs, easing = "lin
             // Bump version so Excalidraw recognizes the change.
             patch.version = (element.version ?? 1) + frame;
             patch.updated = Date.now();
-            wss.updateCanvas([patch]);
+            wss.updateCanvas([patch], originSessionId);
             if (frame >= totalFrames) {
                 resolve({ ok: true });
             }

@@ -19,7 +19,7 @@ export declare class CanvasWebSocketServer extends EventEmitter {
     private m_defaultDebounceMs;
     private m_pendingTriggers;
     private m_sessionTriggers;
-    /** Element IDs recently written via MCP — echoes of these are suppressed. */
+    /** Element IDs recently written via MCP, with optional originating session. */
     private m_agentWrittenIds;
     /** Pending browser export callbacks keyed by requestId. */
     private m_pendingExports;
@@ -78,18 +78,18 @@ export declare class CanvasWebSocketServer extends EventEmitter {
     /**
      * Clear all elements from the cache and broadcast an empty canvas to browsers.
      */
-    clearCanvas(): void;
+    clearCanvas(originSessionId?: string): void;
     /**
      * Apply partial patches to existing cached elements. Each patch must have
      * an `id` matching a cached element. Unknown fields are merged in; the
      * rest of the element is preserved. Returns IDs of elements not found.
      */
-    patchCanvas(patches: Array<Record<string, unknown>>): string[];
+    patchCanvas(patches: Array<Record<string, unknown>>, originSessionId?: string): string[];
     /**
      * Merge element updates into the cache and broadcast a patch to all
      * connected browsers. Agent-initiated — does NOT restart the debounce timer.
      */
-    updateCanvas(elements: ExcalidrawElement[]): void;
+    updateCanvas(elements: ExcalidrawElement[], originSessionId?: string): void;
     /**
      * Return the number of connected browser clients.
      */

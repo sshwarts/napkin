@@ -167,8 +167,13 @@ export function analyzeCanvas(elements) {
     // --- Extract edges (arrows with bindings) ---
     const edges = [];
     for (const arrow of arrowElements) {
-        const from = arrow.startBinding?.elementId;
-        const to = arrow.endBinding?.elementId;
+        const arrowCustomData = (typeof arrow.customData === "object" && arrow.customData !== null)
+            ? arrow.customData
+            : undefined;
+        const from = arrow.startBinding?.elementId
+            ?? (arrowCustomData && typeof arrowCustomData.from === "string" ? arrowCustomData.from : undefined);
+        const to = arrow.endBinding?.elementId
+            ?? (arrowCustomData && typeof arrowCustomData.to === "string" ? arrowCustomData.to : undefined);
         if (!from || !to)
             continue;
         // Find label text bound to this arrow.
@@ -189,7 +194,6 @@ export function analyzeCanvas(elements) {
             label,
             thought_bubble: isThoughtBubbleStyle(arrow),
         };
-        const arrowCustomData = arrow.customData;
         if (arrowCustomData && Object.keys(arrowCustomData).length > 0) {
             edgeObj.metadata = arrowCustomData;
         }

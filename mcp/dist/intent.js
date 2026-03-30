@@ -50,8 +50,11 @@ const LABEL_DEFAULTS = {
 const DEFAULT_NODE_WIDTH = 160;
 const DEFAULT_NODE_HEIGHT = 60;
 const NODE_PADDING = 24;
+const NODE_TEXT_HORIZONTAL_PADDING = 10;
+const NODE_TEXT_VERTICAL_PADDING = 24;
 const SPACING = 90;
 const CONNECT_GAP = 1;
+const CONNECT_VERTICAL_BIAS = 2.5;
 /**
  * Estimate text width in pixels. Rough approximation since we don't have
  * browser font metrics. Uses average character width for fontFamily 5.
@@ -59,6 +62,22 @@ const CONNECT_GAP = 1;
 function estimateTextWidth(text, fontSize) {
     // Average character width is roughly 0.55× fontSize for Excalidraw's default font.
     return text.length * fontSize * 0.55;
+}
+export function estimateWrappedLineCount(text, innerWidth, avgCharWidthPx) {
+    const safeInnerWidth = Math.max(1, innerWidth);
+    const segments = text.split("\n");
+    let totalLines = 0;
+    for (const segment of segments) {
+        const wrapped = Math.max(1, Math.ceil((segment.length * avgCharWidthPx) / safeInnerWidth));
+        totalLines += wrapped;
+    }
+    return totalLines;
+}
+export function estimateTextContainerHeight(text, innerWidth, fontSize, lineHeightFactor, minHeight, verticalPadding, avgCharWidthFactor = 0.55) {
+    const avgCharWidthPx = fontSize * avgCharWidthFactor;
+    const lines = estimateWrappedLineCount(text, innerWidth, avgCharWidthPx);
+    const lineHeightPx = fontSize * lineHeightFactor;
+    return Math.max(minHeight, Math.ceil(lines * lineHeightPx) + verticalPadding);
 }
 /** Generate a fractional index for element ordering. */
 let indexCounter = Date.now() % 100000;
@@ -149,7 +168,7 @@ function applyStyle(style) {
 /**
  * Add a labeled node to the canvas. Server handles placement.
  */
-export function addNode(wss, label, shape, style, near, metadata) {
+export function addNode(wss, label, shape, style, near, metadata, originSessionId) {
     const elements = wss.getCanvasElements();
     const nodeId = genId();
     const textId = genId();
@@ -158,7 +177,9 @@ export function addNode(wss, label, shape, style, near, metadata) {
     const textWidth = estimateTextWidth(label, TEXT_DEFAULTS.fontSize);
     const minWidth = textWidth + NODE_PADDING * 2;
     const w = Math.max(DEFAULT_NODE_WIDTH, Math.ceil(minWidth / 10) * 10);
-    const h = DEFAULT_NODE_HEIGHT;
+    const h = estimateTextContainerHeight(label, w - NODE_TEXT_HORIZONTAL_PADDING * 2, TEXT_DEFAULTS.fontSize, TEXT_DEFAULTS.lineHeight, DEFAULT_NODE_HEIGHT, NODE_TEXT_VERTICAL_PADDING);
+    const textLineCount = estimateWrappedLineCount(label, w - NODE_TEXT_HORIZONTAL_PADDING * 2, TEXT_DEFAULTS.fontSize * 0.55);
+    const textHeight = Math.max(20, Math.ceil(textLineCount * TEXT_DEFAULTS.fontSize * TEXT_DEFAULTS.lineHeight));
     const pos = findOpenSpace(elements, w, h, near);
     const now = Date.now();
     const styleOverrides = applyStyle(style);
@@ -190,10 +211,10 @@ export function addNode(wss, label, shape, style, near, metadata) {
     const textEl = {
         id: textId,
         type: "text",
-        x: pos.x + 10,
-        y: pos.y + h / 2 - 10,
-        width: w - 20,
-        height: 20,
+        x: pos.x + NODE_TEXT_HORIZONTAL_PADDING,
+        y: pos.y + h / 2 - textHeight / 2,
+        width: w - NODE_TEXT_HORIZONTAL_PADDING * 2,
+        height: textHeight,
         strokeColor: styleOverrides.strokeColor ?? NODE_DEFAULTS.strokeColor,
         backgroundColor: "transparent",
         fillStyle: "solid",
@@ -221,13 +242,70 @@ export function addNode(wss, label, shape, style, near, metadata) {
         startBinding: null,
         endBinding: null,
     };
-    wss.updateCanvas([node, textEl]);
+    wss.updateCanvas([node, textEl], originSessionId);
     return nodeId;
 }
 /**
  * Connect two nodes with an arrow. Server computes binding points.
  */
-export function connect(wss, fromId, toId, label) {
+export function resolveConnectionRouting(fromCx, fromCy, toCx, toCy) {
+    const horizontalDistance = Math.abs(toCx - fromCx);
+    const verticalDistance = Math.abs(toCy - fromCy);
+    const useVertical = verticalDistance * CONNECT_VERTICAL_BIAS >= horizontalDistance;
+    if (useVertical && toCy >= fromCy)
+        return { useVertical: true, sourceSide: "bottom", targetSide: "top" };
+    if (useVertical && toCy < fromCy)
+        return { useVertical: true, sourceSide: "top", targetSide: "bottom" };
+    if (toCx >= fromCx)
+        return { useVertical: false, sourceSide: "right", targetSide: "left" };
+    return { useVertical: false, sourceSide: "left", targetSide: "right" };
+}
+export function resolveArrowGeometry(fromRect, toRect, gap = CONNECT_GAP) {
+    const fromCx = fromRect.x + fromRect.width / 2;
+    const fromCy = fromRect.y + fromRect.height / 2;
+    const toCx = toRect.x + toRect.width / 2;
+    const toCy = toRect.y + toRect.height / 2;
+    const routing = resolveConnectionRouting(fromCx, fromCy, toCx, toCy);
+    let startX;
+    let startY;
+    let endX;
+    let endY;
+    if (!routing.useVertical) {
+        if (routing.sourceSide === "right") {
+            startX = fromRect.x + fromRect.width + gap;
+            startY = fromCy;
+            endX = toRect.x - gap;
+            endY = toCy;
+        }
+        else {
+            startX = fromRect.x - gap;
+            startY = fromCy;
+            endX = toRect.x + toRect.width + gap;
+            endY = toCy;
+        }
+    }
+    else if (routing.sourceSide === "bottom") {
+        startX = fromCx;
+        startY = fromRect.y + fromRect.height + gap;
+        endX = toCx;
+        endY = toRect.y - gap;
+    }
+    else {
+        startX = fromCx;
+        startY = fromRect.y - gap;
+        endX = toCx;
+        endY = toRect.y + toRect.height + gap;
+    }
+    return {
+        startX,
+        startY,
+        endX,
+        endY,
+        dx: endX - startX,
+        dy: endY - startY,
+    };
+}
+export function connect(wss, fromId, toId, label, originSessionId) {
     const elements = wss.getCanvasElements();
     const fromEl = elements.find((el) => el.id === fromId);
     const toEl = elements.find((el) => el.id === toId);
@@ -241,44 +319,15 @@ export function connect(wss, fromId, toId, label) {
     // Keep bindings so Excalidraw can still re-anchor on subsequent node moves.
     const fromCx = fromEl.x + fromEl.width / 2;
     const fromCy = fromEl.y + fromEl.height / 2;
-    const toCx = toEl.x + toEl.width / 2;
-    const toCy = toEl.y + toEl.height / 2;
-    const horizontalDistance = Math.abs(toCx - fromCx);
-    const verticalDistance = Math.abs(toCy - fromCy);
-    let startX;
-    let startY;
-    let endX;
-    let endY;
-    if (horizontalDistance >= verticalDistance) {
-        if (toCx >= fromCx) {
-            startX = fromEl.x + fromEl.width + CONNECT_GAP;
-            startY = fromCy;
-            endX = toEl.x - CONNECT_GAP;
-            endY = toCy;
-        }
-        else {
-            startX = fromEl.x - CONNECT_GAP;
-            startY = fromCy;
-            endX = toEl.x + toEl.width + CONNECT_GAP;
-            endY = toCy;
-        }
-    }
-    else if (toCy >= fromCy) {
-        startX = fromCx;
-        startY = fromEl.y + fromEl.height + CONNECT_GAP;
-        endX = toCx;
-        endY = toEl.y - CONNECT_GAP;
-    }
-    else {
-        startX = fromCx;
-        startY = fromEl.y - CONNECT_GAP;
-        endX = toCx;
-        endY = toEl.y + toEl.height + CONNECT_GAP;
-    }
+    const geometry = resolveArrowGeometry({ x: fromEl.x, y: fromEl.y, width: fromEl.width, height: fromEl.height }, { x: toEl.x, y: toEl.y, width: toEl.width, height: toEl.height }, CONNECT_GAP);
+    const startX = geometry.startX;
+    const startY = geometry.startY;
+    const endX = geometry.endX;
+    const endY = geometry.endY;
     const arrowX = startX;
     const arrowY = startY;
-    const dx = endX - startX;
-    const dy = endY - startY;
+    const dx = geometry.dx;
+    const dy = geometry.dy;
     const boundElements = [];
     const arrowEls = [];
     // Optional label on the arrow.
@@ -339,6 +388,10 @@ export function connect(wss, fromId, toId, label) {
         groupIds: [],
         frameId: null,
         boundElements: boundElements.length > 0 ? boundElements : null,
+        customData: {
+            from: fromId,
+            to: toId,
+        },
         updated: now,
         link: null,
         locked: false,
@@ -357,14 +410,14 @@ export function connect(wss, fromId, toId, label) {
     wss.patchCanvas([
         { id: fromId, boundElements: fromBound },
         { id: toId, boundElements: toBound },
-    ]);
-    wss.updateCanvas(arrowEls);
+    ], originSessionId);
+    wss.updateCanvas(arrowEls, originSessionId);
     return arrowId;
 }
 /**
  * Move an element by a relative offset.
  */
-export function move(wss, id, dx, dy) {
+export function move(wss, id, dx, dy, originSessionId) {
     const el = wss.getCanvasElements().find((e) => e.id === id);
     if (!el)
         return { error: `Element "${id}" not found.` };
@@ -382,13 +435,13 @@ export function move(wss, id, dx, dy) {
             }
         }
     }
-    wss.patchCanvas(patches);
+    wss.patchCanvas(patches, originSessionId);
     return { ok: true };
 }
 /**
  * Resize an element. Maintains center position.
  */
-export function resize(wss, id, width, height) {
+export function resize(wss, id, width, height, originSessionId) {
     const el = wss.getCanvasElements().find((e) => e.id === id);
     if (!el)
         return { error: `Element "${id}" not found.` };
@@ -402,23 +455,23 @@ export function resize(wss, id, width, height) {
             y: cy - newH / 2,
             width: newW,
             height: newH,
-        }]);
+        }], originSessionId);
     return { ok: true };
 }
 /**
  * Apply style changes to an element. Thin wrapper over patchCanvas.
  */
-export function styleElement(wss, id, style) {
+export function styleElement(wss, id, style, originSessionId) {
     const el = wss.getCanvasElements().find((e) => e.id === id);
     if (!el)
         return { error: `Element "${id}" not found.` };
-    wss.patchCanvas([{ id, ...applyStyle(style) }]);
+    wss.patchCanvas([{ id, ...applyStyle(style) }], originSessionId);
     return { ok: true };
 }
 /**
  * Add a floating text label near an element.
  */
-export function addLabel(wss, text, nearId, metadata) {
+export function addLabel(wss, text, nearId, metadata, originSessionId) {
     const elements = wss.getCanvasElements();
     const ref = elements.find((el) => el.id === nearId);
     if (!ref)
@@ -456,13 +509,13 @@ export function addLabel(wss, text, nearId, metadata) {
         endBinding: null,
         ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
     };
-    wss.updateCanvas([label]);
+    wss.updateCanvas([label], originSessionId);
     return labelId;
 }
 /**
  * Delete an element and its bound text.
  */
-export function deleteElement(wss, id) {
+export function deleteElement(wss, id, originSessionId) {
     const el = wss.getCanvasElements().find((e) => e.id === id);
     if (!el)
         return { error: `Element "${id}" not found.` };
@@ -472,7 +525,7 @@ export function deleteElement(wss, id) {
             patches.push({ id: bound.id, isDeleted: true });
         }
     }
-    wss.patchCanvas(patches);
+    wss.patchCanvas(patches, originSessionId);
     return { ok: true };
 }
 //# sourceMappingURL=intent.js.map

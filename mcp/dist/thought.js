@@ -5,7 +5,7 @@
  * Thought bubbles are visually distinct (dashed, purple, translucent) and
  * positioned to avoid overlapping existing elements.
  */
-import { genIndex } from "./intent.js";
+import { genIndex, estimateTextContainerHeight, estimateWrappedLineCount } from "./intent.js";
 /** Thought bubble visual style constants. */
 const THOUGHT_STYLE = {
     strokeStyle: "dashed",
@@ -22,8 +22,9 @@ const CONFIRMED_STYLE = {
     opacity: 100,
 };
 const BUBBLE_WIDTH = 250;
-const BUBBLE_HEIGHT = 60;
+const BUBBLE_MIN_HEIGHT = 60;
 const TEXT_PADDING = 10;
+const BUBBLE_VERTICAL_PADDING = 24;
 const OFFSET_FROM_NODE = 50;
 /** Generate a random ID matching Excalidraw's format. */
 function generateId() {
@@ -41,7 +42,7 @@ function overlaps(ax, ay, aw, ah, bx, by, bw, bh) {
 /**
  * Find a position for a new thought bubble that doesn't overlap existing elements.
  */
-function findPosition(elements, nearNodeId) {
+function findPosition(elements, bubbleWidth, bubbleHeight, nearNodeId) {
     let baseX = 50;
     let baseY = 50;
     if (nearNodeId) {
@@ -67,10 +68,10 @@ function findPosition(elements, nearNodeId) {
     let candidateY = baseY;
     let attempts = 0;
     while (attempts < 20) {
-        const hasOverlap = elements.some((el) => overlaps(candidateX, candidateY, BUBBLE_WIDTH, BUBBLE_HEIGHT, el.x, el.y, el.width, el.height));
+        const hasOverlap = elements.some((el) => overlaps(candidateX, candidateY, bubbleWidth, bubbleHeight, el.x, el.y, el.width, el.height));
         if (!hasOverlap)
             break;
-        candidateY += BUBBLE_HEIGHT + 20;
+        candidateY += bubbleHeight + 20;
         attempts++;
     }
     return { x: candidateX, y: candidateY };
@@ -81,18 +82,22 @@ function findPosition(elements, nearNodeId) {
  */
 export function addThoughtBubble(wss, content, nearNodeId) {
     const elements = wss.getCanvasElements();
-    const pos = findPosition(elements, nearNodeId);
     const containerId = generateId();
     const textId = generateId();
     const now = Date.now();
     const prefixedContent = `\u{1F4AD} ${content}`;
+    const textInnerWidth = BUBBLE_WIDTH - TEXT_PADDING * 2;
+    const bubbleHeight = estimateTextContainerHeight(prefixedContent, textInnerWidth, 14, 1.25, BUBBLE_MIN_HEIGHT, BUBBLE_VERTICAL_PADDING);
+    const textLineCount = estimateWrappedLineCount(prefixedContent, textInnerWidth, 14 * 0.55);
+    const textHeight = Math.max(20, Math.ceil(textLineCount * 14 * 1.25));
+    const pos = findPosition(elements, BUBBLE_WIDTH, bubbleHeight, nearNodeId);
     const container = {
         id: containerId,
         type: "rectangle",
         x: pos.x,
         y: pos.y,
         width: BUBBLE_WIDTH,
-        height: BUBBLE_HEIGHT,
+        height: bubbleHeight,
         ...THOUGHT_STYLE,
         angle: 0,
         seed: Math.floor(Math.random() * 100000),
@@ -114,9 +119,9 @@ export function addThoughtBubble(wss, content, nearNodeId) {
         id: textId,
         type: "text",
         x: pos.x + TEXT_PADDING,
-        y: pos.y + BUBBLE_HEIGHT / 2 - 10,
+        y: pos.y + bubbleHeight / 2 - textHeight / 2,
         width: BUBBLE_WIDTH - TEXT_PADDING * 2,
-        height: 20,
+        height: textHeight,
         strokeColor: THOUGHT_STYLE.strokeColor,
         backgroundColor: "transparent",
         fillStyle: "solid",

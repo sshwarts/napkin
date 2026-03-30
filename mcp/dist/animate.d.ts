@@ -10,7 +10,7 @@ import type { CanvasWebSocketServer } from "./websocket.js";
  * Animate a single element from its current state to the target properties.
  * Resolves when the animation completes.
  */
-export declare function animateElement(wss: CanvasWebSocketServer, elementId: string, target: Record<string, unknown>, durationMs: number, easing?: string, commit?: Record<string, unknown>): Promise<{
+export declare function animateElement(wss: CanvasWebSocketServer, elementId: string, target: Record<string, unknown>, durationMs: number, easing?: string, commit?: Record<string, unknown>, originSessionId?: string): Promise<{
     ok: true;
 } | {
     error: string;

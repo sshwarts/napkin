@@ -7,6 +7,7 @@
  */
 import dagre from "dagre";
 import { analyzeCanvas } from "./spatial.js";
+import { resolveArrowGeometry } from "./intent.js";
 const LAYOUT_MARGIN = 50;
 /**
  * Auto-layout the canvas using Dagre.
@@ -91,50 +92,50 @@ export function layoutCanvas(wss, style = "TB", rootId) {
     for (const el of elements) {
         if (el.type !== "arrow")
             continue;
-        const startId = el.startBinding?.elementId;
-        const endId = el.endBinding?.elementId;
+        const arrowMetadata = (typeof el.customData === "object" && el.customData !== null)
+            ? el.customData
+            : undefined;
+        const startId = el.startBinding?.elementId
+            ?? (arrowMetadata && typeof arrowMetadata.from === "string" ? arrowMetadata.from : undefined);
+        const endId = el.endBinding?.elementId
+            ?? (arrowMetadata && typeof arrowMetadata.to === "string" ? arrowMetadata.to : undefined);
         const startPos = startId ? newPos.get(startId) : undefined;
         const endPos = endId ? newPos.get(endId) : undefined;
         if (!startPos && !endPos)
             continue;
-        // Compute arrow from source edge to target edge.
+        // Compute arrow from source edge to target edge using shared connect geometry.
         const fromCx = startPos ? startPos.x + startPos.w / 2 : el.x;
         const fromCy = startPos ? startPos.y + startPos.h / 2 : el.y;
         const pts = el.points;
         const toCx = endPos ? endPos.x + endPos.w / 2 : el.x + (pts?.[1]?.[0] ?? 0);
         const toCy = endPos ? endPos.y + endPos.h / 2 : el.y + (pts?.[1]?.[1] ?? 0);
-        const rawDx = toCx - fromCx;
-        const rawDy = toCy - fromCy;
-        // Determine primary direction and compute edge-to-edge points.
-        let startX, startY, endX, endY;
-        if (Math.abs(rawDx) >= Math.abs(rawDy)) {
-            // Horizontal: right edge of source → left edge of target (or vice versa).
-            if (rawDx >= 0) {
-                startX = startPos ? startPos.x + startPos.w : fromCx;
-                endX = endPos ? endPos.x : toCx;
-            }
-            else {
-                startX = startPos ? startPos.x : fromCx;
-                endX = endPos ? endPos.x + endPos.w : toCx;
-            }
-            startY = fromCy;
-            endY = toCy;
-        }
-        else {
-            // Vertical: bottom edge of source → top edge of target (or vice versa).
-            if (rawDy >= 0) {
-                startY = startPos ? startPos.y + startPos.h : fromCy;
-                endY = endPos ? endPos.y : toCy;
-            }
-            else {
-                startY = startPos ? startPos.y : fromCy;
-                endY = endPos ? endPos.y + endPos.h : toCy;
-            }
-            startX = fromCx;
-            endX = toCx;
-        }
-        const dx = endX - startX;
-        const dy = endY - startY;
+        const geometry = resolveArrowGeometry({
+            x: startPos ? startPos.x : fromCx,
+            y: startPos ? startPos.y : fromCy,
+            width: startPos ? startPos.w : 0,
+            height: startPos ? startPos.h : 0,
+        }, {
+            x: endPos ? endPos.x : toCx,
+            y: endPos ? endPos.y : toCy,
+            width: endPos ? endPos.w : 0,
+            height: endPos ? endPos.h : 0,
+        });
+        const startX = geometry.startX;
+        const startY = geometry.startY;
+        const dx = geometry.dx;
+        const dy = geometry.dy;
+        const existingMetadata = arrowMetadata ?? {};
+        const fromNodeId = (typeof existingMetadata.from === "string" && existingMetadata.from.length > 0)
+            ? existingMetadata.from
+            : startId;
+        const toNodeId = (typeof existingMetadata.to === "string" && existingMetadata.to.length > 0)
+            ? existingMetadata.to
+            : endId;
+        const metadataPatch = { ...existingMetadata };
+        if (fromNodeId)
+            metadataPatch.from = fromNodeId;
+        if (toNodeId)
+            metadataPatch.to = toNodeId;
         patches.push({
             id: el.id,
             x: startX,
@@ -142,6 +143,9 @@ export function layoutCanvas(wss, style = "TB", rootId) {
             width: Math.abs(dx),
             height: Math.abs(dy),
             points: [[0, 0], [dx, dy]],
+            startBinding: null,
+            endBinding: null,
+            customData: metadataPatch,
         });
         // Also reposition the arrow's bound text label if it has one.
         if (el.boundElements) {

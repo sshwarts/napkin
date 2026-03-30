@@ -45,6 +45,10 @@ interface SessionTriggerState {
   changedSinceTrigger: Set<string>;
   preChangeSnapshot: Map<string, ExcalidrawElement>;
 }
+interface AgentWriteMarker {
+  writtenAt: number;
+  originSessionId?: string;
+}
 
 export class CanvasWebSocketServer extends EventEmitter {
   private m_wss: WebSocketServer | null = null;
@@ -58,8 +62,8 @@ export class CanvasWebSocketServer extends EventEmitter {
   private m_defaultDebounceMs: number;
   private m_pendingTriggers: AgentTrigger[] = [];
   private m_sessionTriggers: Map<string, SessionTriggerState> = new Map();
-  /** Element IDs recently written via MCP — echoes of these are suppressed. */
-  private m_agentWrittenIds: Map<string, number> = new Map();
+  /** Element IDs recently written via MCP, with optional originating session. */
+  private m_agentWrittenIds: Map<string, AgentWriteMarker> = new Map();
   /** Pending browser export callbacks keyed by requestId. */
   private m_pendingExports: Map<string, (data: string) => void> = new Map();
   /** Counter for auto-generating fractional indices. */
@@ -193,10 +197,14 @@ export class CanvasWebSocketServer extends EventEmitter {
   /**
    * Clear all elements from the cache and broadcast an empty canvas to browsers.
    */
-  clearCanvas(): void {
+  clearCanvas(originSessionId?: string): void {
+    const now = Date.now();
+    for (const el of this.m_state.elements) {
+      this.m_agentWrittenIds.set(el.id, { writtenAt: now, originSessionId });
+    }
     this.m_state.elements = [];
     this.m_state.appState = null;
-    this.m_state.lastUpdated = Date.now();
+    this.m_state.lastUpdated = now;
     if (this.isBatchBroadcasting()) {
       this.m_pendingBatchReplace = true;
       this.m_pendingBatchPatchById.clear();
@@ -211,7 +219,7 @@ export class CanvasWebSocketServer extends EventEmitter {
    * an `id` matching a cached element. Unknown fields are merged in; the
    * rest of the element is preserved. Returns IDs of elements not found.
    */
-  patchCanvas(patches: Array<Record<string, unknown>>): string[] {
+  patchCanvas(patches: Array<Record<string, unknown>>, originSessionId?: string): string[] {
     const notFound: string[] = [];
     const patched: ExcalidrawElement[] = [];
     const now = Date.now();
@@ -231,7 +239,7 @@ export class CanvasWebSocketServer extends EventEmitter {
       } as ExcalidrawElement;
       this.m_state.elements[idx] = updated;
       patched.push(updated);
-      this.m_agentWrittenIds.set(id, now);
+      this.m_agentWrittenIds.set(id, { writtenAt: now, originSessionId });
     }
     if (patched.length > 0) {
       this.m_state.lastUpdated = now;
@@ -244,7 +252,7 @@ export class CanvasWebSocketServer extends EventEmitter {
    * Merge element updates into the cache and broadcast a patch to all
    * connected browsers. Agent-initiated — does NOT restart the debounce timer.
    */
-  updateCanvas(elements: ExcalidrawElement[]): void {
+  updateCanvas(elements: ExcalidrawElement[], originSessionId?: string): void {
     const existingById = new Map<string, number>();
     for (let i = 0; i < this.m_state.elements.length; i++) {
       existingById.set(this.m_state.elements[i].id, i);
@@ -260,7 +268,7 @@ export class CanvasWebSocketServer extends EventEmitter {
         merged.push(el);
       }
       // Mark as agent-written so browser echoes are suppressed.
-      this.m_agentWrittenIds.set(el.id, now);
+      this.m_agentWrittenIds.set(el.id, { writtenAt: now, originSessionId });
     }
     this.m_state.elements = merged;
     this.m_state.lastUpdated = Date.now();
@@ -393,6 +401,11 @@ export class CanvasWebSocketServer extends EventEmitter {
       // back the canvas_replace we sent on connect.
       if (this.m_lastReplaceSentAt > 0 &&
           (now - this.m_lastReplaceSentAt) < CanvasWebSocketServer.HYDRATION_SUPPRESS_MS) {
+        // If server has non-empty cache and browser reconnects with empty state,
+        // preserve server state instead of letting empty hydration wipe it.
+        if (this.m_state.elements.length > 0 && update.elements.length === 0) {
+          return;
+        }
         this.m_state.elements = update.elements;
         this.m_state.appState = update.appState ?? null;
         this.m_state.lastUpdated = now;
@@ -400,23 +413,24 @@ export class CanvasWebSocketServer extends EventEmitter {
       }
       const previousElements = this.m_state.elements;
       // Diff: find elements that changed (new, updated, or deleted).
-      // Suppress echoes of elements the agent recently wrote via MCP.
+      // Track origin session for recent agent-written elements so we can
+      // suppress webhook echo only for that origin session.
       const oldById = new Map(previousElements.map((el) => [el.id, el.updated as number ?? 0]));
       const changedIds = new Set<string>();
+      const changeOriginById = new Map<string, string>();
       for (const el of update.elements) {
         const oldUpdated = oldById.get(el.id);
         if (oldUpdated === undefined || (el.updated as number ?? 0) !== oldUpdated) {
-          // Check if this is an echo of an agent write.
-          const agentWriteTime = this.m_agentWrittenIds.get(el.id);
-          if (agentWriteTime && (now - agentWriteTime) < CanvasWebSocketServer.ECHO_SUPPRESS_MS) {
-            continue; // Suppress — this is the browser echoing back our own write.
+          const marker = this.m_agentWrittenIds.get(el.id);
+          if (marker && (now - marker.writtenAt) < CanvasWebSocketServer.ECHO_SUPPRESS_MS && marker.originSessionId) {
+            changeOriginById.set(el.id, marker.originSessionId);
           }
           changedIds.add(el.id);
         }
       }
       // Clean up expired agent write markers.
-      for (const [id, writeTime] of this.m_agentWrittenIds) {
-        if (now - writeTime >= CanvasWebSocketServer.ECHO_SUPPRESS_MS) {
+      for (const [id, marker] of this.m_agentWrittenIds) {
+        if (now - marker.writtenAt >= CanvasWebSocketServer.ECHO_SUPPRESS_MS) {
           this.m_agentWrittenIds.delete(id);
         }
       }
@@ -425,16 +439,23 @@ export class CanvasWebSocketServer extends EventEmitter {
       for (const oldEl of previousElements) {
         if (!newIdSet.has(oldEl.id)) {
           changedIds.add(oldEl.id);
+          const marker = this.m_agentWrittenIds.get(oldEl.id);
+          if (marker && (now - marker.writtenAt) < CanvasWebSocketServer.ECHO_SUPPRESS_MS && marker.originSessionId) {
+            changeOriginById.set(oldEl.id, marker.originSessionId);
+          }
         }
       }
       this.m_state.elements = update.elements;
       this.m_state.appState = update.appState ?? null;
       this.m_state.lastUpdated = Date.now();
-      // Only restart debounce if something actually changed.
-      // Prevents browser echo of agent patches from triggering false wakeups.
+      // Only restart per-session debounce if something changed for that session.
       if (changedIds.size > 0) {
         for (const session of this.m_sessionTriggers.values()) {
           for (const changedId of changedIds) {
+            const originSessionId = changeOriginById.get(changedId);
+            if (originSessionId && originSessionId === session.sessionId) {
+              continue;
+            }
             session.changedSinceTrigger.add(changedId);
             if (!session.preChangeSnapshot.has(changedId)) {
               const oldEl = previousElements.find((el) => el.id === changedId);
@@ -443,7 +464,9 @@ export class CanvasWebSocketServer extends EventEmitter {
               }
             }
           }
-          this.resetDebounceForSession(session);
+          if (session.changedSinceTrigger.size > 0) {
+            this.resetDebounceForSession(session);
+          }
         }
       }
     } else if (msg.type === "chat_message") {

@@ -189,8 +189,13 @@ export function analyzeCanvas(elements: ExcalidrawElement[]): StructuredCanvas {
   // --- Extract edges (arrows with bindings) ---
   const edges: CanvasEdge[] = [];
   for (const arrow of arrowElements) {
-    const from = arrow.startBinding?.elementId;
-    const to = arrow.endBinding?.elementId;
+    const arrowCustomData = (typeof arrow.customData === "object" && arrow.customData !== null)
+      ? (arrow.customData as Record<string, unknown>)
+      : undefined;
+    const from = arrow.startBinding?.elementId
+      ?? (arrowCustomData && typeof arrowCustomData.from === "string" ? arrowCustomData.from : undefined);
+    const to = arrow.endBinding?.elementId
+      ?? (arrowCustomData && typeof arrowCustomData.to === "string" ? arrowCustomData.to : undefined);
     if (!from || !to) continue;
     // Find label text bound to this arrow.
     let label: string | undefined;
@@ -209,7 +214,6 @@ export function analyzeCanvas(elements: ExcalidrawElement[]): StructuredCanvas {
       label,
       thought_bubble: isThoughtBubbleStyle(arrow),
     };
-    const arrowCustomData = arrow.customData as Record<string, unknown> | undefined;
     if (arrowCustomData && Object.keys(arrowCustomData).length > 0) {
       edgeObj.metadata = arrowCustomData;
     }

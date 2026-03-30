@@ -320,6 +320,10 @@ function traverseFromStart(
  * Register all MCP tools on the given server.
  */
 export function registerTools(server: McpServer, wss: CanvasWebSocketServer, sessions: SessionManager): void {
+  const resolveOriginSessionId = (sessionId?: string): string | undefined => {
+    if (typeof sessionId === "string" && sessionId.length > 0) return sessionId;
+    return sessions.getActiveSession()?.sessionId;
+  };
   server.tool(
     "get_canvas",
     "Returns the current canvas as a spatially analyzed structured object with nodes, edges, zones, sticky notes, thought bubbles, and freehand sketches.",
@@ -570,9 +574,11 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
   server.tool(
     "clear_canvas",
     "Remove all elements from the canvas.",
-    {},
-    async () => {
-      wss.clearCanvas();
+    {
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
+    },
+    async ({ session_id }) => {
+      wss.clearCanvas(resolveOriginSessionId(session_id));
       return {
         content: [
           {
@@ -588,9 +594,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
     "patch_canvas",
     "Modify existing canvas elements without resending full definitions. Each patch is an object with an 'id' field and the fields to change. The server merges the patch with the cached element and broadcasts. Use for style changes, position tweaks, text edits — anything that modifies an existing element.",
     {
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
       patches: z.array(z.record(z.unknown())).describe("Array<{ id: string, [field]: any }>. Only include the fields you want to change. JSON-string format is no longer accepted."),
     },
-    async ({ patches }) => {
+    async ({ patches, session_id }) => {
       if (!Array.isArray(patches)) {
         return {
           content: [{ type: "text" as const, text: "Error: patches must be an array of patch objects." }],
@@ -603,7 +610,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
           isError: true,
         };
       }
-      const notFound = wss.patchCanvas(patches);
+      const notFound = wss.patchCanvas(patches, resolveOriginSessionId(session_id));
       const applied = patches.length - notFound.length;
       let msg = `Patched ${applied} element(s).`;
       if (notFound.length > 0) {
@@ -619,11 +626,12 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
     "update_canvas",
     "Add new elements to the canvas. Requires full element definitions. For modifying existing elements, use patch_canvas instead.",
     {
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
       elements: z.array(z.record(z.unknown())).describe(
         "Array of ExcalidrawElement objects to merge into the canvas. JSON-string format is no longer accepted."
       ),
     },
-    async ({ elements }) => {
+    async ({ elements, session_id }) => {
       if (!Array.isArray(elements)) {
         return {
           content: [
@@ -646,7 +654,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
           isError: true,
         };
       }
-      wss.updateCanvas(elements as import("./types.js").ExcalidrawElement[]);
+      wss.updateCanvas(elements as import("./types.js").ExcalidrawElement[], resolveOriginSessionId(session_id));
       return {
         content: [
           {
@@ -669,9 +677,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       style: z.record(z.unknown()).optional().describe("Style overrides: color, fill/background, opacity, strokeStyle, strokeWidth"),
       near: z.string().optional().describe("ID of an element to place the new node near"),
       metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData. Conventions: intent, notes, status (wip|review|done|parking_lot), owner"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ label, shape, style, near, metadata }) => {
-      const id = addNode(wss, label, shape, style as Record<string, unknown> | undefined, near, metadata as Record<string, unknown> | undefined);
+    async ({ label, shape, style, near, metadata, session_id }) => {
+      const id = addNode(wss, label, shape, style as Record<string, unknown> | undefined, near, metadata as Record<string, unknown> | undefined, resolveOriginSessionId(session_id));
       return { content: [{ type: "text" as const, text: `Created node "${label}" (${id})` }] };
     }
   );
@@ -683,9 +692,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       from_id: z.string().describe("Source node ID"),
       to_id: z.string().describe("Target node ID"),
       label: z.string().optional().describe("Optional label on the arrow"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ from_id, to_id, label }) => {
-      const result = connect(wss, from_id, to_id, label);
+    async ({ from_id, to_id, label, session_id }) => {
+      const result = connect(wss, from_id, to_id, label, resolveOriginSessionId(session_id));
       if (typeof result === "object" && "error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -700,9 +710,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       id: z.string().describe("Element ID to move"),
       dx: z.number().describe("Horizontal offset in pixels (positive = right)"),
       dy: z.number().describe("Vertical offset in pixels (positive = down)"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ id, dx, dy }) => {
-      const result = move(wss, id, dx, dy);
+    async ({ id, dx, dy, session_id }) => {
+      const result = move(wss, id, dx, dy, resolveOriginSessionId(session_id));
       if ("error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -717,9 +728,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       id: z.string().describe("Element ID to resize"),
       width: z.number().optional().describe("New width in pixels"),
       height: z.number().optional().describe("New height in pixels"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ id, width, height }) => {
-      const result = resize(wss, id, width, height);
+    async ({ id, width, height, session_id }) => {
+      const result = resize(wss, id, width, height, resolveOriginSessionId(session_id));
       if ("error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -733,9 +745,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
     {
       id: z.string().describe("Element ID to style"),
       style: z.record(z.unknown()).describe("Style properties: color, fill, background, opacity, strokeStyle, strokeWidth"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ id, style: s }) => {
-      const result = styleElement(wss, id, s as Record<string, unknown>);
+    async ({ id, style: s, session_id }) => {
+      const result = styleElement(wss, id, s as Record<string, unknown>, resolveOriginSessionId(session_id));
       if ("error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -750,9 +763,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       text: z.string().describe("Label text"),
       near_id: z.string().describe("ID of the element to place the label near"),
       metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ text, near_id, metadata }) => {
-      const result = addLabel(wss, text, near_id, metadata as Record<string, unknown> | undefined);
+    async ({ text, near_id, metadata, session_id }) => {
+      const result = addLabel(wss, text, near_id, metadata as Record<string, unknown> | undefined, resolveOriginSessionId(session_id));
       if (typeof result === "object" && "error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -765,9 +779,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
     "Delete an element and its bound text labels from the canvas.",
     {
       id: z.string().describe("Element ID to delete"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ id }) => {
-      const result = deleteElement(wss, id);
+    async ({ id, session_id }) => {
+      const result = deleteElement(wss, id, resolveOriginSessionId(session_id));
       if ("error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }
@@ -993,9 +1008,10 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
       duration_ms: z.number().describe("Animation duration in milliseconds"),
       easing: z.enum(["linear", "ease-in", "ease-out"]).optional().describe("Easing function (default: linear)"),
       commit: z.record(z.unknown()).optional().describe("Properties to apply atomically on animation completion (e.g. { isDeleted: true } to remove after fade-out, or final position values)"),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
     },
-    async ({ id, to, duration_ms, easing, commit }) => {
-      const result = await animateElement(wss, id, to, duration_ms, easing, commit);
+    async ({ id, to, duration_ms, easing, commit, session_id }) => {
+      const result = await animateElement(wss, id, to, duration_ms, easing, commit, resolveOriginSessionId(session_id));
       if ("error" in result) {
         return {
           content: [{ type: "text" as const, text: `Error: ${result.error}` }],
@@ -1042,10 +1058,12 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
           ref: z.string().optional().describe("Optional alias for this operation output, used by later $ref tokens."),
         })
       ).min(1),
+      session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
       cancel_on_error: z.boolean().optional().describe("Stop at first failure (default: true)."),
       broadcast_mode: z.enum(["end", "per_op"]).optional().describe("Write broadcast mode (default: end)."),
     },
-    async ({ operations, cancel_on_error, broadcast_mode }) => {
+    async ({ operations, session_id, cancel_on_error, broadcast_mode }) => {
+      const originSessionId = resolveOriginSessionId(session_id);
       const shouldCancelOnError = cancel_on_error ?? true;
       const mode = broadcast_mode ?? "end";
       const opResults: IntentOperationResult[] = [];
@@ -1077,7 +1095,8 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
               typeof args.shape === "string" ? args.shape : undefined,
               typeof args.style === "object" && args.style !== null ? args.style as Record<string, unknown> : undefined,
               typeof args.near === "string" ? args.near : undefined,
-              typeof args.metadata === "object" && args.metadata !== null ? args.metadata as Record<string, unknown> : undefined
+              typeof args.metadata === "object" && args.metadata !== null ? args.metadata as Record<string, unknown> : undefined,
+              originSessionId
             );
             return { id };
           }
@@ -1087,7 +1106,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
             if (typeof fromId !== "string" || typeof toId !== "string") {
               throw new Error("connect requires string args 'from_id' and 'to_id'.");
             }
-            const result = connect(wss, fromId, toId, typeof args.label === "string" ? args.label : undefined);
+            const result = connect(wss, fromId, toId, typeof args.label === "string" ? args.label : undefined, originSessionId);
             if (typeof result === "object" && "error" in result) throw new Error(result.error);
             return { id: result };
           }
@@ -1098,7 +1117,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
             if (typeof id !== "string" || typeof dx !== "number" || typeof dy !== "number") {
               throw new Error("move requires args { id: string, dx: number, dy: number }.");
             }
-            const result = move(wss, id, dx, dy);
+            const result = move(wss, id, dx, dy, originSessionId);
             if ("error" in result) throw new Error(result.error);
             return {};
           }
@@ -1107,7 +1126,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
             if (typeof id !== "string") throw new Error("resize requires string arg 'id'.");
             const width = typeof args.width === "number" ? args.width : undefined;
             const height = typeof args.height === "number" ? args.height : undefined;
-            const result = resize(wss, id, width, height);
+            const result = resize(wss, id, width, height, originSessionId);
             if ("error" in result) throw new Error(result.error);
             return {};
           }
@@ -1115,7 +1134,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
             const id = args.id;
             if (typeof id !== "string") throw new Error("style requires string arg 'id'.");
             const styleArgs = asRecord(args.style, "style arg 'style'");
-            const result = styleElement(wss, id, styleArgs);
+            const result = styleElement(wss, id, styleArgs, originSessionId);
             if ("error" in result) throw new Error(result.error);
             return {};
           }
@@ -1129,7 +1148,8 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
               wss,
               text,
               nearId,
-              typeof args.metadata === "object" && args.metadata !== null ? args.metadata as Record<string, unknown> : undefined
+              typeof args.metadata === "object" && args.metadata !== null ? args.metadata as Record<string, unknown> : undefined,
+              originSessionId
             );
             if (typeof result === "object" && "error" in result) throw new Error(result.error);
             return {};
@@ -1137,24 +1157,24 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
           case "delete_element": {
             const id = args.id;
             if (typeof id !== "string") throw new Error("delete_element requires string arg 'id'.");
-            const result = deleteElement(wss, id);
+            const result = deleteElement(wss, id, originSessionId);
             if ("error" in result) throw new Error(result.error);
             return {};
           }
           case "patch_canvas": {
             if (!Array.isArray(args.patches)) throw new Error("patch_canvas requires array arg 'patches'.");
             const patches = args.patches as Array<Record<string, unknown>>;
-            const notFound = wss.patchCanvas(patches);
+            const notFound = wss.patchCanvas(patches, originSessionId);
             if (notFound.length > 0) throw new Error(`patch_canvas not found ids: ${notFound.join(", ")}`);
             return {};
           }
           case "update_canvas": {
             if (!Array.isArray(args.elements)) throw new Error("update_canvas requires array arg 'elements'.");
-            wss.updateCanvas(args.elements as import("./types.js").ExcalidrawElement[]);
+            wss.updateCanvas(args.elements as import("./types.js").ExcalidrawElement[], originSessionId);
             return {};
           }
           case "clear_canvas": {
-            wss.clearCanvas();
+            wss.clearCanvas(originSessionId);
             return {};
           }
           case "layout": {
@@ -1194,7 +1214,7 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
             const commit = (typeof args.commit === "object" && args.commit !== null)
               ? args.commit as Record<string, unknown>
               : undefined;
-            const result = await animateElement(wss, id, toObj, duration, easing as "linear" | "ease-in" | "ease-out" | undefined, commit);
+            const result = await animateElement(wss, id, toObj, duration, easing as "linear" | "ease-in" | "ease-out" | undefined, commit, originSessionId);
             if ("error" in result) throw new Error(result.error);
             return {};
           }

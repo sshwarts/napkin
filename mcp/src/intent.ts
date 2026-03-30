@@ -58,8 +58,14 @@ const LABEL_DEFAULTS = {
 const DEFAULT_NODE_WIDTH = 160;
 const DEFAULT_NODE_HEIGHT = 60;
 const NODE_PADDING = 24;
+const NODE_TEXT_HORIZONTAL_PADDING = 10;
+const NODE_TEXT_VERTICAL_PADDING = 24;
 const SPACING = 90;
 const CONNECT_GAP = 1;
+const CONNECT_VERTICAL_BIAS = 2.5;
+type ConnectionSide = "top" | "bottom" | "left" | "right";
+type ConnectionRouting = { useVertical: boolean; sourceSide: ConnectionSide; targetSide: ConnectionSide };
+type ArrowGeometry = { startX: number; startY: number; endX: number; endY: number; dx: number; dy: number };
 
 /**
  * Estimate text width in pixels. Rough approximation since we don't have
@@ -68,6 +74,32 @@ const CONNECT_GAP = 1;
 function estimateTextWidth(text: string, fontSize: number): number {
   // Average character width is roughly 0.55× fontSize for Excalidraw's default font.
   return text.length * fontSize * 0.55;
+}
+
+export function estimateWrappedLineCount(text: string, innerWidth: number, avgCharWidthPx: number): number {
+  const safeInnerWidth = Math.max(1, innerWidth);
+  const segments = text.split("\n");
+  let totalLines = 0;
+  for (const segment of segments) {
+    const wrapped = Math.max(1, Math.ceil((segment.length * avgCharWidthPx) / safeInnerWidth));
+    totalLines += wrapped;
+  }
+  return totalLines;
+}
+
+export function estimateTextContainerHeight(
+  text: string,
+  innerWidth: number,
+  fontSize: number,
+  lineHeightFactor: number,
+  minHeight: number,
+  verticalPadding: number,
+  avgCharWidthFactor: number = 0.55
+): number {
+  const avgCharWidthPx = fontSize * avgCharWidthFactor;
+  const lines = estimateWrappedLineCount(text, innerWidth, avgCharWidthPx);
+  const lineHeightPx = fontSize * lineHeightFactor;
+  return Math.max(minHeight, Math.ceil(lines * lineHeightPx) + verticalPadding);
 }
 
 /** Generate a fractional index for element ordering. */
@@ -177,7 +209,8 @@ export function addNode(
   shape?: string,
   style?: Record<string, unknown>,
   near?: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  originSessionId?: string
 ): string {
   const elements = wss.getCanvasElements();
   const nodeId = genId();
@@ -187,7 +220,20 @@ export function addNode(
   const textWidth = estimateTextWidth(label, TEXT_DEFAULTS.fontSize);
   const minWidth = textWidth + NODE_PADDING * 2;
   const w = Math.max(DEFAULT_NODE_WIDTH, Math.ceil(minWidth / 10) * 10);
-  const h = DEFAULT_NODE_HEIGHT;
+  const h = estimateTextContainerHeight(
+    label,
+    w - NODE_TEXT_HORIZONTAL_PADDING * 2,
+    TEXT_DEFAULTS.fontSize,
+    TEXT_DEFAULTS.lineHeight,
+    DEFAULT_NODE_HEIGHT,
+    NODE_TEXT_VERTICAL_PADDING
+  );
+  const textLineCount = estimateWrappedLineCount(
+    label,
+    w - NODE_TEXT_HORIZONTAL_PADDING * 2,
+    TEXT_DEFAULTS.fontSize * 0.55
+  );
+  const textHeight = Math.max(20, Math.ceil(textLineCount * TEXT_DEFAULTS.fontSize * TEXT_DEFAULTS.lineHeight));
   const pos = findOpenSpace(elements, w, h, near);
   const now = Date.now();
   const styleOverrides = applyStyle(style);
@@ -219,10 +265,10 @@ export function addNode(
   const textEl: ExcalidrawElement = {
     id: textId,
     type: "text",
-    x: pos.x + 10,
-    y: pos.y + h / 2 - 10,
-    width: w - 20,
-    height: 20,
+    x: pos.x + NODE_TEXT_HORIZONTAL_PADDING,
+    y: pos.y + h / 2 - textHeight / 2,
+    width: w - NODE_TEXT_HORIZONTAL_PADDING * 2,
+    height: textHeight,
     strokeColor: styleOverrides.strokeColor as string ?? NODE_DEFAULTS.strokeColor,
     backgroundColor: "transparent",
     fillStyle: "solid",
@@ -250,18 +296,75 @@ export function addNode(
     startBinding: null,
     endBinding: null,
   };
-  wss.updateCanvas([node, textEl]);
+  wss.updateCanvas([node, textEl], originSessionId);
   return nodeId;
 }
 
 /**
  * Connect two nodes with an arrow. Server computes binding points.
  */
+export function resolveConnectionRouting(fromCx: number, fromCy: number, toCx: number, toCy: number): ConnectionRouting {
+  const horizontalDistance = Math.abs(toCx - fromCx);
+  const verticalDistance = Math.abs(toCy - fromCy);
+  const useVertical = verticalDistance * CONNECT_VERTICAL_BIAS >= horizontalDistance;
+  if (useVertical && toCy >= fromCy) return { useVertical: true, sourceSide: "bottom", targetSide: "top" };
+  if (useVertical && toCy < fromCy) return { useVertical: true, sourceSide: "top", targetSide: "bottom" };
+  if (toCx >= fromCx) return { useVertical: false, sourceSide: "right", targetSide: "left" };
+  return { useVertical: false, sourceSide: "left", targetSide: "right" };
+}
+
+export function resolveArrowGeometry(
+  fromRect: { x: number; y: number; width: number; height: number },
+  toRect: { x: number; y: number; width: number; height: number },
+  gap: number = CONNECT_GAP
+): ArrowGeometry {
+  const fromCx = fromRect.x + fromRect.width / 2;
+  const fromCy = fromRect.y + fromRect.height / 2;
+  const toCx = toRect.x + toRect.width / 2;
+  const toCy = toRect.y + toRect.height / 2;
+  const routing = resolveConnectionRouting(fromCx, fromCy, toCx, toCy);
+  let startX: number;
+  let startY: number;
+  let endX: number;
+  let endY: number;
+  if (!routing.useVertical) {
+    if (routing.sourceSide === "right") {
+      startX = fromRect.x + fromRect.width + gap;
+      startY = fromCy;
+      endX = toRect.x - gap;
+      endY = toCy;
+    } else {
+      startX = fromRect.x - gap;
+      startY = fromCy;
+      endX = toRect.x + toRect.width + gap;
+      endY = toCy;
+    }
+  } else if (routing.sourceSide === "bottom") {
+    startX = fromCx;
+    startY = fromRect.y + fromRect.height + gap;
+    endX = toCx;
+    endY = toRect.y - gap;
+  } else {
+    startX = fromCx;
+    startY = fromRect.y - gap;
+    endX = toCx;
+    endY = toRect.y + toRect.height + gap;
+  }
+  return {
+    startX,
+    startY,
+    endX,
+    endY,
+    dx: endX - startX,
+    dy: endY - startY,
+  };
+}
 export function connect(
   wss: CanvasWebSocketServer,
   fromId: string,
   toId: string,
-  label?: string
+  label?: string,
+  originSessionId?: string
 ): string | { error: string } {
   const elements = wss.getCanvasElements();
   const fromEl = elements.find((el) => el.id === fromId);
@@ -274,41 +377,19 @@ export function connect(
   // Keep bindings so Excalidraw can still re-anchor on subsequent node moves.
   const fromCx = fromEl.x + fromEl.width / 2;
   const fromCy = fromEl.y + fromEl.height / 2;
-  const toCx = toEl.x + toEl.width / 2;
-  const toCy = toEl.y + toEl.height / 2;
-  const horizontalDistance = Math.abs(toCx - fromCx);
-  const verticalDistance = Math.abs(toCy - fromCy);
-  let startX: number;
-  let startY: number;
-  let endX: number;
-  let endY: number;
-  if (horizontalDistance >= verticalDistance) {
-    if (toCx >= fromCx) {
-      startX = fromEl.x + fromEl.width + CONNECT_GAP;
-      startY = fromCy;
-      endX = toEl.x - CONNECT_GAP;
-      endY = toCy;
-    } else {
-      startX = fromEl.x - CONNECT_GAP;
-      startY = fromCy;
-      endX = toEl.x + toEl.width + CONNECT_GAP;
-      endY = toCy;
-    }
-  } else if (toCy >= fromCy) {
-    startX = fromCx;
-    startY = fromEl.y + fromEl.height + CONNECT_GAP;
-    endX = toCx;
-    endY = toEl.y - CONNECT_GAP;
-  } else {
-    startX = fromCx;
-    startY = fromEl.y - CONNECT_GAP;
-    endX = toCx;
-    endY = toEl.y + toEl.height + CONNECT_GAP;
-  }
+  const geometry = resolveArrowGeometry(
+    { x: fromEl.x, y: fromEl.y, width: fromEl.width, height: fromEl.height },
+    { x: toEl.x, y: toEl.y, width: toEl.width, height: toEl.height },
+    CONNECT_GAP
+  );
+  const startX = geometry.startX;
+  const startY = geometry.startY;
+  const endX = geometry.endX;
+  const endY = geometry.endY;
   const arrowX = startX;
   const arrowY = startY;
-  const dx = endX - startX;
-  const dy = endY - startY;
+  const dx = geometry.dx;
+  const dy = geometry.dy;
   const boundElements: Array<{ id: string; type: string }> = [];
   const arrowEls: ExcalidrawElement[] = [];
   // Optional label on the arrow.
@@ -369,6 +450,10 @@ export function connect(
     groupIds: [],
     frameId: null,
     boundElements: boundElements.length > 0 ? boundElements : null,
+    customData: {
+      from: fromId,
+      to: toId,
+    },
     updated: now,
     link: null,
     locked: false,
@@ -387,8 +472,8 @@ export function connect(
   wss.patchCanvas([
     { id: fromId, boundElements: fromBound },
     { id: toId, boundElements: toBound },
-  ]);
-  wss.updateCanvas(arrowEls);
+  ], originSessionId);
+  wss.updateCanvas(arrowEls, originSessionId);
   return arrowId;
 }
 
@@ -399,7 +484,8 @@ export function move(
   wss: CanvasWebSocketServer,
   id: string,
   dx: number,
-  dy: number
+  dy: number,
+  originSessionId?: string
 ): { ok: true } | { error: string } {
   const el = wss.getCanvasElements().find((e) => e.id === id);
   if (!el) return { error: `Element "${id}" not found.` };
@@ -417,7 +503,7 @@ export function move(
       }
     }
   }
-  wss.patchCanvas(patches);
+  wss.patchCanvas(patches, originSessionId);
   return { ok: true };
 }
 
@@ -428,7 +514,8 @@ export function resize(
   wss: CanvasWebSocketServer,
   id: string,
   width?: number,
-  height?: number
+  height?: number,
+  originSessionId?: string
 ): { ok: true } | { error: string } {
   const el = wss.getCanvasElements().find((e) => e.id === id);
   if (!el) return { error: `Element "${id}" not found.` };
@@ -442,7 +529,7 @@ export function resize(
     y: cy - newH / 2,
     width: newW,
     height: newH,
-  }]);
+  }], originSessionId);
   return { ok: true };
 }
 
@@ -452,11 +539,12 @@ export function resize(
 export function styleElement(
   wss: CanvasWebSocketServer,
   id: string,
-  style: Record<string, unknown>
+  style: Record<string, unknown>,
+  originSessionId?: string
 ): { ok: true } | { error: string } {
   const el = wss.getCanvasElements().find((e) => e.id === id);
   if (!el) return { error: `Element "${id}" not found.` };
-  wss.patchCanvas([{ id, ...applyStyle(style) }]);
+  wss.patchCanvas([{ id, ...applyStyle(style) }], originSessionId);
   return { ok: true };
 }
 
@@ -467,7 +555,8 @@ export function addLabel(
   wss: CanvasWebSocketServer,
   text: string,
   nearId: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  originSessionId?: string
 ): string | { error: string } {
   const elements = wss.getCanvasElements();
   const ref = elements.find((el) => el.id === nearId);
@@ -505,7 +594,7 @@ export function addLabel(
     endBinding: null,
     ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
   };
-  wss.updateCanvas([label]);
+  wss.updateCanvas([label], originSessionId);
   return labelId;
 }
 
@@ -514,7 +603,8 @@ export function addLabel(
  */
 export function deleteElement(
   wss: CanvasWebSocketServer,
-  id: string
+  id: string,
+  originSessionId?: string
 ): { ok: true } | { error: string } {
   const el = wss.getCanvasElements().find((e) => e.id === id);
   if (!el) return { error: `Element "${id}" not found.` };
@@ -524,6 +614,6 @@ export function deleteElement(
       patches.push({ id: bound.id, isDeleted: true });
     }
   }
-  wss.patchCanvas(patches);
+  wss.patchCanvas(patches, originSessionId);
   return { ok: true };
 }

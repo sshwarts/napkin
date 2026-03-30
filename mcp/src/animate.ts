@@ -74,7 +74,8 @@ export function animateElement(
   target: Record<string, unknown>,
   durationMs: number,
   easing: string = "linear",
-  commit?: Record<string, unknown>
+  commit?: Record<string, unknown>,
+  originSessionId?: string
 ): Promise<{ ok: true } | { error: string }> {
   return new Promise((resolve) => {
     const elements = wss.getCanvasElements();
@@ -144,7 +145,7 @@ export function animateElement(
       // Bump version so Excalidraw recognizes the change.
       patch.version = ((element.version as number) ?? 1) + frame;
       patch.updated = Date.now();
-      wss.updateCanvas([patch as ExcalidrawElement]);
+      wss.updateCanvas([patch as ExcalidrawElement], originSessionId);
       if (frame >= totalFrames) {
         resolve({ ok: true });
       }

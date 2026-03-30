@@ -36,7 +36,7 @@ The conversation stays in the agent's channel (Slack, WhatsApp, CLI). Napkin is 
                    └─────────────────┘
 ```
 
-**Data flow:** Canvas state is owned by the browser. On every Excalidraw change, the browser pushes the full element array to the MCP server via WebSocket. The server caches it. When an agent calls `get_canvas()`, it reads from cache. When an agent writes (`update_canvas`, `add_thought_bubble`, `animate_element`), the server updates the cache and broadcasts a patch to the browser.
+**Data flow:** Browser and server continuously sync canvas state over WebSocket. On every Excalidraw change, the browser pushes the full element array to the MCP server, and the server caches it. When an agent calls `get_canvas()`, it reads from cache. When an agent writes (`update_canvas`, `add_thought_bubble`, `animate_element`), the server updates cache and broadcasts a patch to the browser. During reconnect hydration, the server preserves non-empty cache if a reconnecting browser arrives empty.
 
 ---
 
@@ -155,7 +155,7 @@ All messages are JSON over WebSocket on port 3002.
 { type: "canvas_replace", elements: [...] }  // Full replace (reconnect hydration)
 ```
 
-On new WebSocket connection, the server immediately sends `canvas_replace` with the full cached state so the browser hydrates.
+On new WebSocket connection, the server immediately sends `canvas_replace` with the full cached state so the browser hydrates. If the browser then sends an empty `canvas_update` during hydration while the server cache is non-empty, that empty update is ignored to prevent cache wipe.
 
 ---
 
@@ -163,13 +163,13 @@ On new WebSocket connection, the server immediately sends `canvas_replace` with 
 
 Napkin has three levels of write API, from highest to lowest abstraction:
 
-**Intent API** (recommended) — `add_node`, `connect`, `move`, `resize`, `style`, `add_label`, `delete_element`. Agent describes *what* it wants; server handles coordinates, bindings, and element construction. `connect` uses directional edge selection (left/right for LR, top/bottom for TB) so arrows are clipped correctly on initial render. A 3-node diagram takes ~277 bytes across 6 calls.
+**Intent API** (recommended) — `add_node`, `connect`, `move`, `resize`, `style`, `add_label`, `delete_element`. Agent describes *what* it wants; server handles coordinates, bindings, and element construction. `connect` uses directional edge selection with a vertical bias factor (`k=2.5`) so arrows are clipped correctly on initial render in both TB and LR-style placements. A 3-node diagram takes ~277 bytes across 6 calls.
 
 **patch_canvas** — Modify existing elements with partial patches. Send an array directly, e.g. `[{ id: "X", backgroundColor: "#red" }]` (not a JSON-encoded string). 10-20x payload reduction. Server merges with cached state.
 
 **update_canvas** — Raw element replacement. Required for new elements not covered by the intent API. Send an array directly, e.g. `[{ type: "rectangle", x: 100, y: 120, width: 160, height: 60 }]` (not a JSON-encoded string). Use sparingly.
 
-**Layout** — `layout(style)` runs Dagre on all nodes/edges and repositions them. Call after adding nodes and connections. No coordinate math needed.
+**Layout** — `layout(style)` runs Dagre on all nodes/edges and repositions them. After repositioning, arrows are recomputed using the same geometry resolver used by `connect`, so routing stays consistent when `connect` happens before `layout` (including inside `apply_intents`). No coordinate math needed.
 
 Typical agent workflow: `add_node` → `connect` → `layout` → `style` tweaks via `patch_canvas`.
 
@@ -180,7 +180,7 @@ Typical agent workflow: `add_node` → `connect` → `layout` → `style` tweaks
 `get_canvas()` transforms raw Excalidraw JSON into semantic structure:
 
 - **Nodes** — rectangles, ellipses, diamonds with labels (from bound text elements)
-- **Edges** — arrows with `startBinding`/`endBinding` referencing nodes
+- **Edges** — arrows resolved from `startBinding`/`endBinding` when present, or from `customData.from`/`customData.to` when bindings are cleared after layout stabilization
 - **Zones** — large rectangles containing other elements (swim lanes). A zone labeled "Parking Lot" (case-insensitive) marks contained items with `status: parking_lot`
 - **Proximity properties** — floating text near a node is attached as an inferred property with a confidence score (0–1), based on distance within a configurable grid
 - **Thought bubbles** — elements with `strokeStyle: "dashed"` and `strokeColor: "#8B5CF6"`
@@ -462,7 +462,7 @@ Adapt the `session_id`, `webhook_url`, and export path for your framework.
 
 ## Design decisions
 
-**Canvas state is in-memory.** No persistence layer. If the server restarts, the canvas resets. The browser reconnects and sends its current state, so no data is lost as long as the browser tab is open. Export to `.excalidraw` for persistence.
+**Canvas state is in-memory.** No persistence layer. If the server restarts, the canvas resets. On reconnect, the server rehydrates the browser from cached state, and ignores empty hydration echoes when cache is non-empty. Export to `.excalidraw` for persistence across server/browser restarts.
 
 **Pure canvas, no chat UI.** The conversation lives in the agent's channel (Slack, WhatsApp, etc.). Napkin is a visual tool, not a messaging app. The webhook/trigger system routes canvas events back to the originating channel. The `chat_message` WebSocket type exists for agent frameworks to inject messages programmatically — there is no chat panel in the browser.
 
@@ -492,7 +492,11 @@ This was initially misdiagnosed as a text font measurement issue. The visual rou
 
 ### Layout arrow repositioning
 
-After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge based on new node positions. Excalidraw does not automatically reposition bound arrows when nodes move via `updateScene` — only interactive drag operations trigger arrow following.
+After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge based on new node positions. This recompute path shares the same geometry resolver as `connect()`, including vertical bias, which prevents routing drift between initial connect-time arrows and post-layout arrows.
+
+To prevent Excalidraw from re-anchoring one endpoint unexpectedly after server-side recompute, layout-updated arrows are written as authoritative geometry (`x`, `y`, `points`) with bindings cleared (`startBinding`/`endBinding = null`). Logical edge identity is preserved in `customData.from` / `customData.to`, and spatial analysis uses that metadata as a fallback when bindings are absent.
+
+Excalidraw does not automatically reposition bound arrows when nodes move via `updateScene` — only interactive drag operations trigger arrow following.
 
 ### Phase status
 
