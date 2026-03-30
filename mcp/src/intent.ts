@@ -175,7 +175,8 @@ export function addNode(
   label: string,
   shape?: string,
   style?: Record<string, unknown>,
-  near?: string
+  near?: string,
+  metadata?: Record<string, unknown>
 ): string {
   const elements = wss.getCanvasElements();
   const nodeId = genId();
@@ -212,6 +213,7 @@ export function addNode(
     locked: false,
     startBinding: null,
     endBinding: null,
+    ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
   };
   const textEl: ExcalidrawElement = {
     id: textId,
@@ -433,7 +435,8 @@ export function styleElement(
 export function addLabel(
   wss: CanvasWebSocketServer,
   text: string,
-  nearId: string
+  nearId: string,
+  metadata?: Record<string, unknown>
 ): string | { error: string } {
   const elements = wss.getCanvasElements();
   const ref = elements.find((el) => el.id === nearId);
@@ -469,6 +472,7 @@ export function addLabel(
     containerId: null,
     startBinding: null,
     endBinding: null,
+    ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
   };
   wss.updateCanvas([label]);
   return labelId;

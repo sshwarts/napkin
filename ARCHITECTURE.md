@@ -181,6 +181,7 @@ Typical agent workflow: `add_node` → `connect` → `layout` → `style` tweaks
 - **Proximity properties** — floating text near a node is attached as an inferred property with a confidence score (0–1), based on distance within a configurable grid
 - **Thought bubbles** — elements with `strokeStyle: "dashed"` and `strokeColor: "#8B5CF6"`
 - **Freehand sketches** — `freedraw` elements, optionally with vision-generated descriptions
+- **Metadata** — `customData` from Excalidraw elements is exposed as `metadata` on nodes and edges when present. Set via `add_node(metadata: {...})` or `patch_canvas([{ id, customData: {...} }])`. Conventions: `intent`, `notes`, `status` (wip|review|done|parking_lot), `owner`.
 
 No coordinates are exposed to the agent. The output is purely semantic.
 
@@ -417,9 +418,14 @@ When the napkin MCP server is available, you have a shared Excalidraw whiteboard
 **Drawing — use the intent API (no coordinates needed):**
   add_node, connect, move, resize, style, add_label, delete_element, patch_canvas, layout
 
+**Metadata — attach non-visual data to elements:**
+  add_node("Auth", metadata: { intent: "entry point", status: "wip", owner: "perry" })
+  patch_canvas([{ id: "...", customData: { status: "done" } }])
+  get_canvas() returns metadata on nodes/edges when present.
+
 **When using update_canvas for new elements**, only send the meaningful fields:
-  id, type, x, y, width, height, and optionally strokeColor/backgroundColor/text.
-  The server auto-fills all other fields (angle, seed, version, index, opacity, etc.).
+  type, x, y, and optionally width/height/strokeColor/backgroundColor/text.
+  The server auto-fills all other fields (id, angle, seed, version, index, roundness, opacity, etc.).
 
 **On webhook trigger:**
   1. First action: add_thought_bubble() — acknowledge visually before processing
@@ -473,4 +479,4 @@ After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 | Complete | MCP server, WebSocket sync, spatial analysis, thought bubbles, vision, animation, sessions, webhooks, export |
-| Phase 2 | Complete | Intent API, patch_canvas, layout (with arrow repositioning), change_summary, trigger filtering, DPR workaround |
+| Phase 2 | Complete | Intent API, patch_canvas, layout (with arrow repositioning), change_summary, trigger filtering, DPR workaround, element metadata (customData) |

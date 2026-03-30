@@ -220,15 +220,16 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
 
   server.tool(
     "add_node",
-    "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID.",
+    "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID. Optional metadata is stored as customData (invisible in UI, returned in get_canvas). Conventions: intent, notes, status (wip|review|done|parking_lot), owner.",
     {
       label: z.string().describe("Text label for the node"),
       shape: z.enum(["rectangle", "ellipse", "diamond"]).optional().describe("Shape type (default: rectangle)"),
       style: z.record(z.unknown()).optional().describe("Style overrides: color, fill/background, opacity, strokeStyle, strokeWidth"),
       near: z.string().optional().describe("ID of an element to place the new node near"),
+      metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData. Conventions: intent, notes, status (wip|review|done|parking_lot), owner"),
     },
-    async ({ label, shape, style, near }) => {
-      const id = addNode(wss, label, shape, style as Record<string, unknown> | undefined, near);
+    async ({ label, shape, style, near, metadata }) => {
+      const id = addNode(wss, label, shape, style as Record<string, unknown> | undefined, near, metadata as Record<string, unknown> | undefined);
       return { content: [{ type: "text" as const, text: `Created node "${label}" (${id})` }] };
     }
   );
@@ -302,13 +303,14 @@ export function registerTools(server: McpServer, wss: CanvasWebSocketServer, ses
 
   server.tool(
     "add_label",
-    "Add a floating text label near an element.",
+    "Add a floating text label near an element. Optional metadata is stored as customData (invisible in UI, returned in get_canvas).",
     {
       text: z.string().describe("Label text"),
       near_id: z.string().describe("ID of the element to place the label near"),
+      metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData"),
     },
-    async ({ text, near_id }) => {
-      const result = addLabel(wss, text, near_id);
+    async ({ text, near_id, metadata }) => {
+      const result = addLabel(wss, text, near_id, metadata as Record<string, unknown> | undefined);
       if (typeof result === "object" && "error" in result) {
         return { content: [{ type: "text" as const, text: `Error: ${result.error}` }], isError: true };
       }

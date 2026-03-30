@@ -125,6 +125,7 @@ export interface CanvasNode {
   properties: NodeProperty[];
   status?: "deprecated" | "active" | "parking_lot";
   thought_bubble: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface NodeProperty {
@@ -137,6 +138,7 @@ export interface CanvasEdge {
   id: string;
   from: string;
   to: string;
+  metadata?: Record<string, unknown>;
   label?: string;
   thought_bubble: boolean;
 }
