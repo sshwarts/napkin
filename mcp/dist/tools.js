@@ -23,21 +23,24 @@ import { addThoughtBubble, confirmThoughtBubble, dismissThoughtBubble, listThoug
  * Register all MCP tools on the given server.
  */
 export function registerTools(server, wss, sessions) {
-    server.tool("get_canvas", "Returns the current canvas as a spatially analyzed structured object with nodes, edges, zones, sticky notes, thought bubbles, and freehand sketches.", {}, async () => {
+    server.tool("get_canvas", "Returns the current canvas as a spatially analyzed structured object with nodes, edges, zones, sticky notes, thought bubbles, and freehand sketches.", {
+        pretty: z.boolean().optional().describe("Pretty-print JSON output for debugging (default: false)"),
+    }, async ({ pretty }) => {
         const elements = wss.getCanvasElements();
         const structured = analyzeCanvas(elements);
         return {
             content: [
                 {
                     type: "text",
-                    text: JSON.stringify(structured, null, 2),
+                    text: pretty ? JSON.stringify(structured, null, 2) : JSON.stringify(structured),
                 },
             ],
         };
     });
     server.tool("get_canvas_diff", "Returns only elements that changed since a given timestamp. Use to efficiently poll for updates without parsing the full canvas. The timestamp comes from a previous trigger or from Date.now() at your last read.", {
         since: z.number().describe("Epoch millisecond timestamp — returns elements where updated > since"),
-    }, async ({ since }) => {
+        pretty: z.boolean().optional().describe("Pretty-print JSON output for debugging (default: false)"),
+    }, async ({ since, pretty }) => {
         const changed = wss.getCanvasDiff(since);
         if (changed.length === 0) {
             return {
@@ -48,7 +51,7 @@ export function registerTools(server, wss, sessions) {
             content: [
                 {
                     type: "text",
-                    text: JSON.stringify(changed, null, 2),
+                    text: pretty ? JSON.stringify(changed, null, 2) : JSON.stringify(changed),
                 },
             ],
         };
@@ -71,7 +74,7 @@ export function registerTools(server, wss, sessions) {
                 {
                     type: "text",
                     text: triggers.length > 0
-                        ? JSON.stringify(triggers, null, 2)
+                        ? JSON.stringify(triggers)
                         : "No pending triggers.",
                 },
             ],
@@ -89,26 +92,22 @@ export function registerTools(server, wss, sessions) {
         };
     });
     server.tool("patch_canvas", "Modify existing canvas elements without resending full definitions. Each patch is an object with an 'id' field and the fields to change. The server merges the patch with the cached element and broadcasts. Use for style changes, position tweaks, text edits — anything that modifies an existing element.", {
-        patches: z.string().describe("JSON string of Array<{ id: string, [field]: any }>. Only include the fields you want to change."),
+        patches: z.array(z.record(z.unknown())).describe("Array<{ id: string, [field]: any }>. Only include the fields you want to change. JSON-string format is no longer accepted."),
     }, async ({ patches }) => {
-        let parsed;
-        try {
-            parsed = JSON.parse(patches);
-        }
-        catch {
+        if (!Array.isArray(patches)) {
             return {
-                content: [{ type: "text", text: "Error: patches must be a valid JSON array." }],
+                content: [{ type: "text", text: "Error: patches must be an array of patch objects." }],
                 isError: true,
             };
         }
-        if (!Array.isArray(parsed)) {
+        if (patches.some((p) => typeof p !== "object" || p === null || Array.isArray(p))) {
             return {
-                content: [{ type: "text", text: "Error: patches must be a JSON array." }],
+                content: [{ type: "text", text: "Error: each patch must be an object." }],
                 isError: true,
             };
         }
-        const notFound = wss.patchCanvas(parsed);
-        const applied = parsed.length - notFound.length;
+        const notFound = wss.patchCanvas(patches);
+        const applied = patches.length - notFound.length;
         let msg = `Patched ${applied} element(s).`;
         if (notFound.length > 0) {
             msg += ` Not found: ${notFound.join(", ")}`;
@@ -118,52 +117,49 @@ export function registerTools(server, wss, sessions) {
         };
     });
     server.tool("update_canvas", "Add new elements to the canvas. Requires full element definitions. For modifying existing elements, use patch_canvas instead.", {
-        elements: z.string().describe("JSON string of ExcalidrawElement[] to merge into the canvas"),
+        elements: z.array(z.record(z.unknown())).describe("Array of ExcalidrawElement objects to merge into the canvas. JSON-string format is no longer accepted."),
     }, async ({ elements }) => {
-        let parsed;
-        try {
-            parsed = JSON.parse(elements);
-        }
-        catch {
+        if (!Array.isArray(elements)) {
             return {
                 content: [
                     {
                         type: "text",
-                        text: "Error: elements must be a valid JSON array of ExcalidrawElement objects.",
+                        text: "Error: elements must be an array of ExcalidrawElement objects.",
                     },
                 ],
                 isError: true,
             };
         }
-        if (!Array.isArray(parsed)) {
+        if (elements.some((el) => typeof el !== "object" || el === null || Array.isArray(el))) {
             return {
                 content: [
                     {
                         type: "text",
-                        text: "Error: elements must be a JSON array.",
+                        text: "Error: each element must be an object.",
                     },
                 ],
                 isError: true,
             };
         }
-        wss.updateCanvas(parsed);
+        wss.updateCanvas(elements);
         return {
             content: [
                 {
                     type: "text",
-                    text: `Updated canvas with ${parsed.length} element(s). Change broadcast to ${wss.getClientCount()} connected browser(s).`,
+                    text: `Updated canvas with ${elements.length} element(s). Change broadcast to ${wss.getClientCount()} connected browser(s).`,
                 },
             ],
         };
     });
     // --- Intent API (high-level drawing tools) ---
-    server.tool("add_node", "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID.", {
+    server.tool("add_node", "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID. Optional metadata is stored as customData (invisible in UI, returned in get_canvas). Conventions: intent, notes, status (wip|review|done|parking_lot), owner.", {
         label: z.string().describe("Text label for the node"),
         shape: z.enum(["rectangle", "ellipse", "diamond"]).optional().describe("Shape type (default: rectangle)"),
         style: z.record(z.unknown()).optional().describe("Style overrides: color, fill/background, opacity, strokeStyle, strokeWidth"),
         near: z.string().optional().describe("ID of an element to place the new node near"),
-    }, async ({ label, shape, style, near }) => {
-        const id = addNode(wss, label, shape, style, near);
+        metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData. Conventions: intent, notes, status (wip|review|done|parking_lot), owner"),
+    }, async ({ label, shape, style, near, metadata }) => {
+        const id = addNode(wss, label, shape, style, near, metadata);
         return { content: [{ type: "text", text: `Created node "${label}" (${id})` }] };
     });
     server.tool("connect", "Connect two nodes with an arrow. Server computes binding points. Optionally add a label on the arrow.", {
@@ -209,11 +205,12 @@ export function registerTools(server, wss, sessions) {
         }
         return { content: [{ type: "text", text: `Styled "${id}"` }] };
     });
-    server.tool("add_label", "Add a floating text label near an element.", {
+    server.tool("add_label", "Add a floating text label near an element. Optional metadata is stored as customData (invisible in UI, returned in get_canvas).", {
         text: z.string().describe("Label text"),
         near_id: z.string().describe("ID of the element to place the label near"),
-    }, async ({ text, near_id }) => {
-        const result = addLabel(wss, text, near_id);
+        metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData"),
+    }, async ({ text, near_id, metadata }) => {
+        const result = addLabel(wss, text, near_id, metadata);
         if (typeof result === "object" && "error" in result) {
             return { content: [{ type: "text", text: `Error: ${result.error}` }], isError: true };
         }
@@ -232,17 +229,23 @@ export function registerTools(server, wss, sessions) {
     server.tool("start_session", "Start a whiteboard session. The session_id (typically your chat JID) is included in all webhook trigger payloads, allowing the receiver to route responses back to the correct conversation. Optionally override the webhook URL and debounce interval for this session.", {
         session_id: z.string().describe("Session identifier — use your chat JID so webhooks route back to the right channel"),
         webhook_url: z.string().optional().describe("Per-session webhook URL override (falls back to NAPKIN_TRIGGER_WEBHOOK env var)"),
-        debounce_ms: z.number().optional().describe("Override debounce interval in ms for this session (default 500). Use lower values for games/discrete interactions, higher for drawing/whiteboarding."),
-    }, async ({ session_id, webhook_url, debounce_ms }) => {
-        sessions.startSession(session_id, webhook_url, debounce_ms);
-        if (debounce_ms !== undefined) {
-            wss.setDebounceMs(debounce_ms);
-        }
+        debounce_ms: z.number().optional().describe("Override debounce interval in ms for this session (default: AGENT_TRIGGER_DEBOUNCE_MS, 3000 if unset). Use lower values for games/discrete interactions, higher for drawing/whiteboarding."),
+        compact_triggers: z.boolean().optional().describe("When true, webhook payloads use changed_elements_compact instead of full changed_elements for this session (default: false)."),
+    }, async ({ session_id, webhook_url, debounce_ms, compact_triggers }) => {
+        sessions.startSession(session_id, webhook_url, debounce_ms, compact_triggers);
+        wss.upsertSessionTrigger({
+            sessionId: session_id,
+            webhookUrl: webhook_url,
+            debounceMs: debounce_ms,
+            compactTriggers: compact_triggers,
+        });
         const parts = [`Session "${session_id}" started.`];
         if (webhook_url)
             parts.push(`Webhook: ${webhook_url}`);
         if (debounce_ms !== undefined)
             parts.push(`Debounce: ${debounce_ms}ms`);
+        if (compact_triggers !== undefined)
+            parts.push(`Compact triggers: ${compact_triggers ? "on" : "off"}`);
         return {
             content: [{ type: "text", text: parts.join(" ") }],
         };
@@ -251,13 +254,7 @@ export function registerTools(server, wss, sessions) {
         session_id: z.string().describe("Session identifier to end"),
     }, async ({ session_id }) => {
         const ended = sessions.endSession(session_id);
-        // Reset debounce to default if no other sessions have a custom value.
-        const remaining = sessions.listSessions();
-        const customDebounce = remaining.find((s) => s.debounceMs !== undefined);
-        if (!customDebounce) {
-            const defaultMs = parseInt(process.env.AGENT_TRIGGER_DEBOUNCE_MS ?? "500", 10);
-            wss.setDebounceMs(defaultMs);
-        }
+        wss.removeSessionTrigger(session_id);
         return {
             content: [
                 {
@@ -319,7 +316,7 @@ export function registerTools(server, wss, sessions) {
                 {
                     type: "text",
                     text: bubbles.length > 0
-                        ? JSON.stringify(bubbles, null, 2)
+                        ? JSON.stringify(bubbles)
                         : "No thought bubbles on the canvas.",
                 },
             ],

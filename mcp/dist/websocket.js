@@ -21,12 +21,9 @@ export class CanvasWebSocketServer extends EventEmitter {
         lastUpdated: 0,
     };
     m_port;
-    m_debounceTimer = null;
-    m_debounceMs;
+    m_defaultDebounceMs;
     m_pendingTriggers = [];
-    m_changedSinceTrigger = new Set();
-    /** Snapshot of element states before changes, for computing change_summary. */
-    m_preChangeSnapshot = new Map();
+    m_sessionTriggers = new Map();
     /** Element IDs recently written via MCP — echoes of these are suppressed. */
     m_agentWrittenIds = new Map();
     /** Pending browser export callbacks keyed by requestId. */
@@ -40,13 +37,43 @@ export class CanvasWebSocketServer extends EventEmitter {
     constructor(port) {
         super();
         this.m_port = port ?? parseInt(process.env.MCP_WS_PORT ?? String(DEFAULT_WS_PORT), 10);
-        this.m_debounceMs = parseInt(process.env.AGENT_TRIGGER_DEBOUNCE_MS ?? String(DEFAULT_DEBOUNCE_MS), 10);
+        this.m_defaultDebounceMs = parseInt(process.env.AGENT_TRIGGER_DEBOUNCE_MS ?? String(DEFAULT_DEBOUNCE_MS), 10);
     }
-    /**
-     * Override the debounce interval at runtime (e.g. per-session).
-     */
-    setDebounceMs(ms) {
-        this.m_debounceMs = ms;
+    upsertSessionTrigger(session) {
+        const existing = this.m_sessionTriggers.get(session.sessionId);
+        if (existing) {
+            existing.webhookUrl = session.webhookUrl;
+            existing.debounceMs = session.debounceMs ?? this.m_defaultDebounceMs;
+            existing.compactTriggers = session.compactTriggers ?? false;
+            return;
+        }
+        this.m_sessionTriggers.set(session.sessionId, {
+            sessionId: session.sessionId,
+            webhookUrl: session.webhookUrl,
+            debounceMs: session.debounceMs ?? this.m_defaultDebounceMs,
+            compactTriggers: session.compactTriggers ?? false,
+            debounceTimer: null,
+            changedSinceTrigger: new Set(),
+            preChangeSnapshot: new Map(),
+        });
+    }
+    removeSessionTrigger(sessionId) {
+        const state = this.m_sessionTriggers.get(sessionId);
+        if (state?.debounceTimer) {
+            clearTimeout(state.debounceTimer);
+        }
+        this.m_sessionTriggers.delete(sessionId);
+    }
+    restoreSessionTriggers(sessions) {
+        this.m_sessionTriggers.clear();
+        for (const session of sessions) {
+            this.upsertSessionTrigger({
+                sessionId: session.sessionId,
+                webhookUrl: session.webhookUrl,
+                debounceMs: session.debounceMs,
+                compactTriggers: session.compactTriggers,
+            });
+        }
     }
     /**
      * Start the WebSocket server.
@@ -199,7 +226,12 @@ export class CanvasWebSocketServer extends EventEmitter {
      * Stop the WebSocket server and disconnect all clients.
      */
     stop() {
-        this.cancelDebounce();
+        for (const session of this.m_sessionTriggers.values()) {
+            if (session.debounceTimer) {
+                clearTimeout(session.debounceTimer);
+                session.debounceTimer = null;
+            }
+        }
         for (const client of this.m_clients) {
             client.close();
         }
@@ -219,11 +251,16 @@ export class CanvasWebSocketServer extends EventEmitter {
             this.m_lastReplaceSentAt = Date.now();
         }
         // Notify agents that a browser (re)connected — they may need to re-establish sessions.
-        this.emitTrigger({
-            source: "reconnect",
-            timestamp: Date.now(),
-            message: "[napkin] Browser connected",
-        });
+        for (const session of this.m_sessionTriggers.values()) {
+            this.emitTrigger({
+                session_id: session.sessionId,
+                source: "reconnect",
+                timestamp: Date.now(),
+                message: "[napkin] Browser connected",
+                webhook_url: session.webhookUrl,
+                compact_triggers: session.compactTriggers,
+            });
+        }
         ws.on("message", (data) => {
             this.handleMessage(ws, data);
         });
@@ -257,10 +294,11 @@ export class CanvasWebSocketServer extends EventEmitter {
                 this.m_state.lastUpdated = now;
                 return; // Update cache but don't trigger.
             }
+            const previousElements = this.m_state.elements;
             // Diff: find elements that changed (new, updated, or deleted).
             // Suppress echoes of elements the agent recently wrote via MCP.
-            const oldById = new Map(this.m_state.elements.map((el) => [el.id, el.updated ?? 0]));
-            let hasRealChanges = false;
+            const oldById = new Map(previousElements.map((el) => [el.id, el.updated ?? 0]));
+            const changedIds = new Set();
             for (const el of update.elements) {
                 const oldUpdated = oldById.get(el.id);
                 if (oldUpdated === undefined || (el.updated ?? 0) !== oldUpdated) {
@@ -269,13 +307,7 @@ export class CanvasWebSocketServer extends EventEmitter {
                     if (agentWriteTime && (now - agentWriteTime) < CanvasWebSocketServer.ECHO_SUPPRESS_MS) {
                         continue; // Suppress — this is the browser echoing back our own write.
                     }
-                    this.m_changedSinceTrigger.add(el.id);
-                    // Capture the old state for change_summary.
-                    const oldEl = this.m_state.elements.find((e) => e.id === el.id);
-                    if (oldEl && !this.m_preChangeSnapshot.has(el.id)) {
-                        this.m_preChangeSnapshot.set(el.id, { ...oldEl });
-                    }
-                    hasRealChanges = true;
+                    changedIds.add(el.id);
                 }
             }
             // Clean up expired agent write markers.
@@ -285,30 +317,49 @@ export class CanvasWebSocketServer extends EventEmitter {
                 }
             }
             // Also detect deleted elements (present in old, missing in new).
-            if (update.elements.length !== this.m_state.elements.length) {
-                hasRealChanges = true;
+            const newIdSet = new Set(update.elements.map((el) => el.id));
+            for (const oldEl of previousElements) {
+                if (!newIdSet.has(oldEl.id)) {
+                    changedIds.add(oldEl.id);
+                }
             }
             this.m_state.elements = update.elements;
             this.m_state.appState = update.appState ?? null;
             this.m_state.lastUpdated = Date.now();
             // Only restart debounce if something actually changed.
             // Prevents browser echo of agent patches from triggering false wakeups.
-            if (hasRealChanges) {
-                this.resetDebounce();
+            if (changedIds.size > 0) {
+                for (const session of this.m_sessionTriggers.values()) {
+                    for (const changedId of changedIds) {
+                        session.changedSinceTrigger.add(changedId);
+                        if (!session.preChangeSnapshot.has(changedId)) {
+                            const oldEl = previousElements.find((el) => el.id === changedId);
+                            if (oldEl) {
+                                session.preChangeSnapshot.set(changedId, { ...oldEl });
+                            }
+                        }
+                    }
+                    this.resetDebounceForSession(session);
+                }
             }
         }
         else if (msg.type === "chat_message") {
             const chat = msg;
-            this.cancelDebounce();
-            const changedIds = this.drainChangedIds();
-            this.emitTrigger({
-                source: "chat",
-                message: chat.message,
-                timestamp: Date.now(),
-                changed_element_ids: changedIds,
-                change_summary: this.computeChangeSummary(changedIds),
-                change_type: this.classifyChanges(changedIds),
-            });
+            for (const session of this.m_sessionTriggers.values()) {
+                this.cancelDebounceForSession(session);
+                const changedIds = this.drainChangedIdsForSession(session);
+                this.emitTrigger({
+                    session_id: session.sessionId,
+                    source: "chat",
+                    message: chat.message,
+                    timestamp: Date.now(),
+                    webhook_url: session.webhookUrl,
+                    compact_triggers: session.compactTriggers,
+                    changed_element_ids: changedIds,
+                    change_summary: this.computeChangeSummary(changedIds, session.preChangeSnapshot),
+                    change_type: this.classifyChanges(changedIds, session.preChangeSnapshot),
+                });
+            }
         }
         else if (msg.type === "export_response") {
             const resp = msg;
@@ -318,37 +369,45 @@ export class CanvasWebSocketServer extends EventEmitter {
             }
         }
     }
-    resetDebounce() {
-        this.cancelDebounce();
-        if (this.m_debounceMs === 0)
+    resetDebounceForSession(session) {
+        this.cancelDebounceForSession(session);
+        if (session.debounceMs === 0) {
+            this.emitDebounceTriggerForSession(session);
             return;
-        this.m_debounceTimer = setTimeout(() => {
-            this.m_debounceTimer = null;
-            const changedIds = this.drainChangedIds();
-            const changeType = this.classifyChanges(changedIds);
-            // Optionally suppress cosmetic-only triggers.
-            if (changeType === "cosmetic" && process.env.NAPKIN_TRIGGER_SEMANTIC_ONLY === "true") {
-                this.m_preChangeSnapshot.clear();
-                return;
-            }
-            this.emitTrigger({
-                source: "debounce",
-                timestamp: Date.now(),
-                changed_element_ids: changedIds,
-                change_summary: this.computeChangeSummary(changedIds),
-                change_type: changeType,
-            });
-        }, this.m_debounceMs);
+        }
+        session.debounceTimer = setTimeout(() => {
+            session.debounceTimer = null;
+            this.emitDebounceTriggerForSession(session);
+        }, session.debounceMs);
     }
-    cancelDebounce() {
-        if (this.m_debounceTimer) {
-            clearTimeout(this.m_debounceTimer);
-            this.m_debounceTimer = null;
+    emitDebounceTriggerForSession(session) {
+        const changedIds = this.drainChangedIdsForSession(session);
+        const changeType = this.classifyChanges(changedIds, session.preChangeSnapshot);
+        // Optionally suppress cosmetic-only triggers.
+        if (changeType === "cosmetic" && process.env.NAPKIN_TRIGGER_SEMANTIC_ONLY === "true") {
+            session.preChangeSnapshot.clear();
+            return;
+        }
+        this.emitTrigger({
+            session_id: session.sessionId,
+            source: "debounce",
+            timestamp: Date.now(),
+            webhook_url: session.webhookUrl,
+            compact_triggers: session.compactTriggers,
+            changed_element_ids: changedIds,
+            change_summary: this.computeChangeSummary(changedIds, session.preChangeSnapshot),
+            change_type: changeType,
+        });
+    }
+    cancelDebounceForSession(session) {
+        if (session.debounceTimer) {
+            clearTimeout(session.debounceTimer);
+            session.debounceTimer = null;
         }
     }
-    drainChangedIds() {
-        const ids = Array.from(this.m_changedSinceTrigger);
-        this.m_changedSinceTrigger.clear();
+    drainChangedIdsForSession(session) {
+        const ids = Array.from(session.changedSinceTrigger);
+        session.changedSinceTrigger.clear();
         return ids;
     }
     /**
@@ -356,12 +415,12 @@ export class CanvasWebSocketServer extends EventEmitter {
      * Semantic: new/deleted element, text changed, connection changed, type changed.
      * Cosmetic: small position change (<20px), color/style change, opacity change.
      */
-    classifyChanges(changedIds) {
+    classifyChanges(changedIds, preChangeSnapshot) {
         const MOVE_THRESHOLD = 20;
         const newById = new Map(this.m_state.elements.map((el) => [el.id, el]));
         for (const id of changedIds) {
             const newEl = newById.get(id);
-            const oldEl = this.m_preChangeSnapshot.get(id);
+            const oldEl = preChangeSnapshot.get(id);
             // New or deleted element = semantic.
             if (!oldEl || !newEl)
                 return "semantic";
@@ -407,7 +466,7 @@ export class CanvasWebSocketServer extends EventEmitter {
         return `${el.type}:${el.id.slice(0, 6)}`;
     }
     /** Compute a human-readable summary of what changed. */
-    computeChangeSummary(changedIds) {
+    computeChangeSummary(changedIds, preChangeSnapshot) {
         if (changedIds.length === 0)
             return "";
         const parts = [];
@@ -426,7 +485,7 @@ export class CanvasWebSocketServer extends EventEmitter {
             if (boundTextIds.has(id))
                 continue;
             const newEl = newById.get(id);
-            const oldEl = this.m_preChangeSnapshot.get(id);
+            const oldEl = preChangeSnapshot.get(id);
             if (!newEl && !oldEl)
                 continue;
             if (!oldEl && newEl) {
@@ -465,7 +524,7 @@ export class CanvasWebSocketServer extends EventEmitter {
                 }
             }
         }
-        this.m_preChangeSnapshot.clear();
+        preChangeSnapshot.clear();
         if (parts.length === 0)
             return "";
         return parts.join("; ");
@@ -483,10 +542,59 @@ export class CanvasWebSocketServer extends EventEmitter {
      */
     applyDefaults(el) {
         const r = el;
+        // Auto-generate ID if missing.
+        if (!r.id) {
+            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+            let id = "";
+            for (let i = 0; i < 20; i++)
+                id += chars.charAt(Math.floor(Math.random() * chars.length));
+            r.id = id;
+        }
         // Generate index if missing.
         if (!r.index) {
             this.m_indexCounter++;
             r.index = `a${this.m_indexCounter.toString(36)}`;
+        }
+        // Type-specific dimension defaults.
+        if (r.width === undefined) {
+            if (el.type === "text") {
+                // Estimate width from text content. Average char width ≈ 0.55× fontSize.
+                const fontSize = r.fontSize ?? 16;
+                const text = r.text ?? "";
+                const lines = text.split("\n");
+                const maxLineLen = Math.max(...lines.map((l) => l.length));
+                r.width = Math.max(10, Math.ceil(maxLineLen * fontSize * 0.55));
+            }
+            else {
+                r.width = 160;
+            }
+        }
+        if (r.height === undefined) {
+            if (el.type === "text") {
+                const fontSize = r.fontSize ?? 16;
+                const lineHeight = r.lineHeight ?? 1.25;
+                const text = r.text ?? "";
+                const lineCount = Math.max(1, text.split("\n").length);
+                r.height = fontSize * lineHeight * lineCount;
+            }
+            else if (el.type === "diamond") {
+                r.height = 100;
+            }
+            else {
+                r.height = 60;
+            }
+        }
+        // Type-specific roundness defaults.
+        if (r.roundness === undefined) {
+            if (el.type === "rectangle" || el.type === "diamond" || el.type === "ellipse") {
+                r.roundness = { type: 3 };
+            }
+            else if (el.type === "arrow" || el.type === "line") {
+                r.roundness = { type: 2 };
+            }
+            else {
+                r.roundness = null;
+            }
         }
         // Common defaults — apply to all element types.
         const common = {
@@ -501,7 +609,6 @@ export class CanvasWebSocketServer extends EventEmitter {
             updated: Date.now(),
             link: null,
             locked: false,
-            roundness: null,
             roughness: 0,
             opacity: 100,
             strokeWidth: 2,
@@ -531,7 +638,7 @@ export class CanvasWebSocketServer extends EventEmitter {
             if (r.fontSize === undefined)
                 r.fontSize = 16;
             if (r.fontFamily === undefined)
-                r.fontFamily = parseInt(process.env.NAPKIN_DEFAULT_FONT_FAMILY ?? "1", 10);
+                r.fontFamily = parseInt(process.env.NAPKIN_DEFAULT_FONT_FAMILY ?? "5", 10);
             if (r.textAlign === undefined)
                 r.textAlign = "left";
             if (r.verticalAlign === undefined)

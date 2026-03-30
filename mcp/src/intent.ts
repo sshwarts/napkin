@@ -58,7 +58,8 @@ const LABEL_DEFAULTS = {
 const DEFAULT_NODE_WIDTH = 160;
 const DEFAULT_NODE_HEIGHT = 60;
 const NODE_PADDING = 24;
-const SPACING = 30;
+const SPACING = 90;
+const CONNECT_GAP = 1;
 
 /**
  * Estimate text width in pixels. Rough approximation since we don't have
@@ -269,15 +270,45 @@ export function connect(
   if (!toEl) return { error: `Element "${toId}" not found.` };
   const arrowId = genId();
   const now = Date.now();
-  // Compute arrow start/end from element centers.
+  // Compute directional edge-to-edge geometry so arrows render correctly on arrival.
+  // Keep bindings so Excalidraw can still re-anchor on subsequent node moves.
   const fromCx = fromEl.x + fromEl.width / 2;
   const fromCy = fromEl.y + fromEl.height / 2;
   const toCx = toEl.x + toEl.width / 2;
   const toCy = toEl.y + toEl.height / 2;
-  const arrowX = fromCx;
-  const arrowY = fromCy;
-  const dx = toCx - fromCx;
-  const dy = toCy - fromCy;
+  const horizontalDistance = Math.abs(toCx - fromCx);
+  const verticalDistance = Math.abs(toCy - fromCy);
+  let startX: number;
+  let startY: number;
+  let endX: number;
+  let endY: number;
+  if (horizontalDistance >= verticalDistance) {
+    if (toCx >= fromCx) {
+      startX = fromEl.x + fromEl.width + CONNECT_GAP;
+      startY = fromCy;
+      endX = toEl.x - CONNECT_GAP;
+      endY = toCy;
+    } else {
+      startX = fromEl.x - CONNECT_GAP;
+      startY = fromCy;
+      endX = toEl.x + toEl.width + CONNECT_GAP;
+      endY = toCy;
+    }
+  } else if (toCy >= fromCy) {
+    startX = fromCx;
+    startY = fromEl.y + fromEl.height + CONNECT_GAP;
+    endX = toCx;
+    endY = toEl.y - CONNECT_GAP;
+  } else {
+    startX = fromCx;
+    startY = fromEl.y - CONNECT_GAP;
+    endX = toCx;
+    endY = toEl.y + toEl.height + CONNECT_GAP;
+  }
+  const arrowX = startX;
+  const arrowY = startY;
+  const dx = endX - startX;
+  const dy = endY - startY;
   const boundElements: Array<{ id: string; type: string }> = [];
   const arrowEls: ExcalidrawElement[] = [];
   // Optional label on the arrow.
@@ -343,8 +374,8 @@ export function connect(
     locked: false,
     points: [[0, 0], [dx, dy]],
     lastCommittedPoint: null,
-    startBinding: { elementId: fromId, focus: 0, gap: 1 },
-    endBinding: { elementId: toId, focus: 0, gap: 1 },
+    startBinding: { elementId: fromId, focus: 0, gap: CONNECT_GAP },
+    endBinding: { elementId: toId, focus: 0, gap: CONNECT_GAP },
     startArrowhead: null,
     endArrowhead: "arrow",
     elbowed: false,

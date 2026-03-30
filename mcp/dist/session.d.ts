@@ -12,6 +12,7 @@ export interface Session {
     sessionId: string;
     webhookUrl?: string;
     debounceMs?: number;
+    compactTriggers?: boolean;
     createdAt: number;
     lastActivity: number;
 }
@@ -24,7 +25,7 @@ export declare class SessionManager {
     /**
      * Start or update a session.
      */
-    startSession(sessionId: string, webhookUrl?: string, debounceMs?: number): void;
+    startSession(sessionId: string, webhookUrl?: string, debounceMs?: number, compactTriggers?: boolean): void;
     /**
      * End a session explicitly.
      */

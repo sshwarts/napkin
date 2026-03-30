@@ -10,17 +10,15 @@
  */
 import { EventEmitter } from "node:events";
 import type { ExcalidrawElement, AgentTrigger } from "./types.js";
+import type { Session } from "./session.js";
 export declare class CanvasWebSocketServer extends EventEmitter {
     private m_wss;
     private m_clients;
     private m_state;
     private m_port;
-    private m_debounceTimer;
-    private m_debounceMs;
+    private m_defaultDebounceMs;
     private m_pendingTriggers;
-    private m_changedSinceTrigger;
-    /** Snapshot of element states before changes, for computing change_summary. */
-    private m_preChangeSnapshot;
+    private m_sessionTriggers;
     /** Element IDs recently written via MCP — echoes of these are suppressed. */
     private m_agentWrittenIds;
     /** Pending browser export callbacks keyed by requestId. */
@@ -32,10 +30,14 @@ export declare class CanvasWebSocketServer extends EventEmitter {
     private m_lastReplaceSentAt;
     private static readonly HYDRATION_SUPPRESS_MS;
     constructor(port?: number);
-    /**
-     * Override the debounce interval at runtime (e.g. per-session).
-     */
-    setDebounceMs(ms: number): void;
+    upsertSessionTrigger(session: {
+        sessionId: string;
+        webhookUrl?: string;
+        debounceMs?: number;
+        compactTriggers?: boolean;
+    }): void;
+    removeSessionTrigger(sessionId: string): void;
+    restoreSessionTriggers(sessions: Session[]): void;
     /**
      * Start the WebSocket server.
      */
@@ -92,9 +94,10 @@ export declare class CanvasWebSocketServer extends EventEmitter {
     stop(): void;
     private handleConnection;
     private handleMessage;
-    private resetDebounce;
-    private cancelDebounce;
-    private drainChangedIds;
+    private resetDebounceForSession;
+    private emitDebounceTriggerForSession;
+    private cancelDebounceForSession;
+    private drainChangedIdsForSession;
     /**
      * Classify changes as semantic or cosmetic.
      * Semantic: new/deleted element, text changed, connection changed, type changed.

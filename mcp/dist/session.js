@@ -27,12 +27,13 @@ export class SessionManager {
     /**
      * Start or update a session.
      */
-    startSession(sessionId, webhookUrl, debounceMs) {
+    startSession(sessionId, webhookUrl, debounceMs, compactTriggers) {
         const now = Date.now();
         this.m_sessions.set(sessionId, {
             sessionId,
             webhookUrl,
             debounceMs,
+            compactTriggers,
             createdAt: now,
             lastActivity: now,
         });

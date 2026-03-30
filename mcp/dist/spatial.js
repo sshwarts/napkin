@@ -157,6 +157,10 @@ export function analyzeCanvas(elements) {
         if (zoneId) {
             node.zone = zoneId;
         }
+        const customData = shape.customData;
+        if (customData && Object.keys(customData).length > 0) {
+            node.metadata = customData;
+        }
         nodes.push(node);
         nodeIds.add(shape.id);
     }
@@ -178,13 +182,18 @@ export function analyzeCanvas(elements) {
                 }
             }
         }
-        edges.push({
+        const edgeObj = {
             id: arrow.id,
             from,
             to,
             label,
             thought_bubble: isThoughtBubbleStyle(arrow),
-        });
+        };
+        const arrowCustomData = arrow.customData;
+        if (arrowCustomData && Object.keys(arrowCustomData).length > 0) {
+            edgeObj.metadata = arrowCustomData;
+        }
+        edges.push(edgeObj);
     }
     // --- Floating text: proximity analysis + sticky notes ---
     const floatingTexts = textElements.filter((t) => !t.containerId);

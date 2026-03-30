@@ -9,11 +9,9 @@
  * If all retries fail, logs and moves on.
  */
 import type { CanvasWebSocketServer } from "./websocket.js";
-import type { SessionManager } from "./session.js";
 /**
  * Start listening for agent triggers and delivering them via webhook.
- * Uses session context when available. No-op if no webhook is configured
- * and no session has a webhook URL.
+ * Delivery is session-scoped: triggers already include session and routing context.
  */
-export declare function startWebhookDelivery(wss: CanvasWebSocketServer, sessions: SessionManager): void;
+export declare function startWebhookDelivery(wss: CanvasWebSocketServer): void;
 //# sourceMappingURL=webhook.d.ts.map

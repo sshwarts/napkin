@@ -26,7 +26,7 @@ const ARROW_DEFAULTS = {
 };
 const TEXT_DEFAULTS = {
     fontSize: 16,
-    fontFamily: 1,
+    fontFamily: 5,
     textAlign: "center",
     verticalAlign: "middle",
     autoResize: true,
@@ -41,7 +41,7 @@ const LABEL_DEFAULTS = {
     roughness: 0,
     opacity: 100,
     fontSize: 14,
-    fontFamily: 1,
+    fontFamily: 5,
     textAlign: "left",
     verticalAlign: "top",
     autoResize: true,
@@ -49,7 +49,17 @@ const LABEL_DEFAULTS = {
 };
 const DEFAULT_NODE_WIDTH = 160;
 const DEFAULT_NODE_HEIGHT = 60;
-const SPACING = 30;
+const NODE_PADDING = 24;
+const SPACING = 90;
+const CONNECT_GAP = 1;
+/**
+ * Estimate text width in pixels. Rough approximation since we don't have
+ * browser font metrics. Uses average character width for fontFamily 5.
+ */
+function estimateTextWidth(text, fontSize) {
+    // Average character width is roughly 0.55× fontSize for Excalidraw's default font.
+    return text.length * fontSize * 0.55;
+}
 /** Generate a fractional index for element ordering. */
 let indexCounter = Date.now() % 100000;
 function genIndex(_elements) {
@@ -139,12 +149,15 @@ function applyStyle(style) {
 /**
  * Add a labeled node to the canvas. Server handles placement.
  */
-export function addNode(wss, label, shape, style, near) {
+export function addNode(wss, label, shape, style, near, metadata) {
     const elements = wss.getCanvasElements();
     const nodeId = genId();
     const textId = genId();
     const type = shapeType(shape);
-    const w = DEFAULT_NODE_WIDTH;
+    // Auto-expand container to fit label text.
+    const textWidth = estimateTextWidth(label, TEXT_DEFAULTS.fontSize);
+    const minWidth = textWidth + NODE_PADDING * 2;
+    const w = Math.max(DEFAULT_NODE_WIDTH, Math.ceil(minWidth / 10) * 10);
     const h = DEFAULT_NODE_HEIGHT;
     const pos = findOpenSpace(elements, w, h, near);
     const now = Date.now();
@@ -172,6 +185,7 @@ export function addNode(wss, label, shape, style, near) {
         locked: false,
         startBinding: null,
         endBinding: null,
+        ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
     };
     const textEl = {
         id: textId,
@@ -223,15 +237,48 @@ export function connect(wss, fromId, toId, label) {
         return { error: `Element "${toId}" not found.` };
     const arrowId = genId();
     const now = Date.now();
-    // Compute arrow start/end from element centers.
+    // Compute directional edge-to-edge geometry so arrows render correctly on arrival.
+    // Keep bindings so Excalidraw can still re-anchor on subsequent node moves.
     const fromCx = fromEl.x + fromEl.width / 2;
     const fromCy = fromEl.y + fromEl.height / 2;
     const toCx = toEl.x + toEl.width / 2;
     const toCy = toEl.y + toEl.height / 2;
-    const arrowX = fromCx;
-    const arrowY = fromCy;
-    const dx = toCx - fromCx;
-    const dy = toCy - fromCy;
+    const horizontalDistance = Math.abs(toCx - fromCx);
+    const verticalDistance = Math.abs(toCy - fromCy);
+    let startX;
+    let startY;
+    let endX;
+    let endY;
+    if (horizontalDistance >= verticalDistance) {
+        if (toCx >= fromCx) {
+            startX = fromEl.x + fromEl.width + CONNECT_GAP;
+            startY = fromCy;
+            endX = toEl.x - CONNECT_GAP;
+            endY = toCy;
+        }
+        else {
+            startX = fromEl.x - CONNECT_GAP;
+            startY = fromCy;
+            endX = toEl.x + toEl.width + CONNECT_GAP;
+            endY = toCy;
+        }
+    }
+    else if (toCy >= fromCy) {
+        startX = fromCx;
+        startY = fromEl.y + fromEl.height + CONNECT_GAP;
+        endX = toCx;
+        endY = toEl.y - CONNECT_GAP;
+    }
+    else {
+        startX = fromCx;
+        startY = fromEl.y - CONNECT_GAP;
+        endX = toCx;
+        endY = toEl.y + toEl.height + CONNECT_GAP;
+    }
+    const arrowX = startX;
+    const arrowY = startY;
+    const dx = endX - startX;
+    const dy = endY - startY;
     const boundElements = [];
     const arrowEls = [];
     // Optional label on the arrow.
@@ -297,8 +344,8 @@ export function connect(wss, fromId, toId, label) {
         locked: false,
         points: [[0, 0], [dx, dy]],
         lastCommittedPoint: null,
-        startBinding: { elementId: fromId, focus: 0, gap: 1 },
-        endBinding: { elementId: toId, focus: 0, gap: 1 },
+        startBinding: { elementId: fromId, focus: 0, gap: CONNECT_GAP },
+        endBinding: { elementId: toId, focus: 0, gap: CONNECT_GAP },
         startArrowhead: null,
         endArrowhead: "arrow",
         elbowed: false,
@@ -371,20 +418,24 @@ export function styleElement(wss, id, style) {
 /**
  * Add a floating text label near an element.
  */
-export function addLabel(wss, text, nearId) {
+export function addLabel(wss, text, nearId, metadata) {
     const elements = wss.getCanvasElements();
     const ref = elements.find((el) => el.id === nearId);
     if (!ref)
         return { error: `Element "${nearId}" not found.` };
     const labelId = genId();
     const now = Date.now();
+    const labelWidth = Math.max(100, estimateTextWidth(text, LABEL_DEFAULTS.fontSize) + 10);
+    const labelHeight = 20;
+    // Find non-overlapping position near the reference element.
+    const pos = findOpenSpace(elements, labelWidth, labelHeight, nearId);
     const label = {
         id: labelId,
         type: "text",
-        x: ref.x + ref.width + 10,
-        y: ref.y,
-        width: 200,
-        height: 20,
+        x: pos.x,
+        y: pos.y,
+        width: labelWidth,
+        height: labelHeight,
         ...LABEL_DEFAULTS,
         angle: 0,
         seed: Math.floor(Math.random() * 100000),
@@ -403,6 +454,7 @@ export function addLabel(wss, text, nearId) {
         containerId: null,
         startBinding: null,
         endBinding: null,
+        ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
     };
     wss.updateCanvas([label]);
     return labelId;

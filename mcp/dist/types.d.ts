@@ -81,9 +81,12 @@ export interface TriggerFired {
 }
 export type WsMessage = CanvasUpdate | CanvasPatch | CanvasReplace | ChatMessage | ExportRequest | ExportResponse | TriggerFired;
 export interface AgentTrigger {
+    session_id?: string;
     source: "debounce" | "chat" | "reconnect";
     message?: string;
     timestamp: number;
+    webhook_url?: string;
+    compact_triggers?: boolean;
     changed_element_ids?: string[];
     change_summary?: string;
     change_type?: "semantic" | "cosmetic";
@@ -104,6 +107,7 @@ export interface CanvasNode {
     properties: NodeProperty[];
     status?: "deprecated" | "active" | "parking_lot";
     thought_bubble: boolean;
+    metadata?: Record<string, unknown>;
 }
 export interface NodeProperty {
     text: string;
@@ -114,6 +118,7 @@ export interface CanvasEdge {
     id: string;
     from: string;
     to: string;
+    metadata?: Record<string, unknown>;
     label?: string;
     thought_bubble: boolean;
 }

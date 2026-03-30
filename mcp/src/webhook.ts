@@ -14,7 +14,6 @@ import https from "node:https";
 import { randomUUID } from "node:crypto";
 import type { CanvasWebSocketServer } from "./websocket.js";
 import type { AgentTrigger } from "./types.js";
-import type { SessionManager } from "./session.js";
 import { analyzeCanvas } from "./spatial.js";
 
 const MAX_RETRIES = 2;
@@ -30,11 +29,81 @@ interface WebhookPayload {
   changed_element_ids?: string[];
   /** Full element data for changed elements — avoids a get_canvas_diff round-trip. */
   changed_elements?: unknown[];
+  /** Compact changed element summaries for token-efficient triggers. */
+  changed_elements_compact?: CompactChangedElement[];
   /** Human-readable description of what changed. */
   change_summary?: string;
   /** Classification: semantic (new/deleted/text/connection) or cosmetic (nudge/style). */
   change_type?: "semantic" | "cosmetic";
   canvas?: unknown;
+}
+
+interface CompactChangedElement {
+  id: string;
+  type: string;
+  label?: string;
+  from?: string;
+  to?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Build compact changed element summaries for webhook payloads.
+ */
+function buildCompactChangedElements(changedIds: string[], allElements: Array<Record<string, unknown>>): CompactChangedElement[] {
+  const elementById = new Map<string, Record<string, unknown>>();
+  for (const el of allElements) {
+    const id = el.id;
+    if (typeof id === "string") {
+      elementById.set(id, el);
+    }
+  }
+  const compact: CompactChangedElement[] = [];
+  for (const id of changedIds) {
+    const el = elementById.get(id);
+    if (!el) continue;
+    let label: string | undefined;
+    if (typeof el.text === "string" && el.text.length > 0) {
+      label = el.text;
+    } else if (Array.isArray(el.boundElements)) {
+      for (const bound of el.boundElements) {
+        if (typeof bound !== "object" || bound === null) continue;
+        const boundRecord = bound as Record<string, unknown>;
+        if (boundRecord.type !== "text") continue;
+        const textId = boundRecord.id;
+        if (typeof textId !== "string") continue;
+        const textEl = elementById.get(textId);
+        if (textEl && typeof textEl.text === "string" && textEl.text.length > 0) {
+          label = textEl.text;
+          break;
+        }
+      }
+    }
+    const metadata = typeof el.customData === "object" && el.customData !== null
+      ? (el.customData as Record<string, unknown>)
+      : undefined;
+    const status = metadata && typeof metadata.status === "string"
+      ? metadata.status
+      : undefined;
+    const compactEl: CompactChangedElement = {
+      id,
+      type: typeof el.type === "string" ? el.type : "unknown",
+    };
+    if (label !== undefined) compactEl.label = label;
+    if (typeof el.startBinding === "object" && el.startBinding !== null) {
+      const start = (el.startBinding as Record<string, unknown>).elementId;
+      if (typeof start === "string") compactEl.from = start;
+    }
+    if (typeof el.endBinding === "object" && el.endBinding !== null) {
+      const end = (el.endBinding as Record<string, unknown>).elementId;
+      if (typeof end === "string") compactEl.to = end;
+    }
+    if (status !== undefined) compactEl.status = status;
+    if (metadata !== undefined) compactEl.metadata = metadata;
+    compact.push(compactEl);
+  }
+  return compact;
 }
 
 /**
@@ -86,36 +155,11 @@ async function postWithRetry(url: URL, body: string): Promise<boolean> {
 }
 
 /**
- * Resolve the webhook URL to use: session override > global env var.
- */
-function resolveWebhookUrl(sessions: SessionManager): URL | null {
-  // Check for an active session with a per-session webhook.
-  const session = sessions.getActiveSession();
-  if (session?.webhookUrl) {
-    try {
-      return new URL(session.webhookUrl);
-    } catch {
-      // Fall through to global.
-    }
-  }
-  // Fall back to global env var.
-  const globalUrl = process.env.NAPKIN_TRIGGER_WEBHOOK;
-  if (!globalUrl) return null;
-  try {
-    return new URL(globalUrl);
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Start listening for agent triggers and delivering them via webhook.
- * Uses session context when available. No-op if no webhook is configured
- * and no session has a webhook URL.
+ * Delivery is session-scoped: triggers already include session and routing context.
  */
 export function startWebhookDelivery(
-  wss: CanvasWebSocketServer,
-  sessions: SessionManager
+  wss: CanvasWebSocketServer
 ): void {
   if (process.env.NAPKIN_WEBHOOK_DISABLED === "true") {
     console.error("[napkin] Webhook delivery disabled (NAPKIN_WEBHOOK_DISABLED=true)");
@@ -126,10 +170,24 @@ export function startWebhookDelivery(
     console.error(`[napkin] Webhook delivery active → ${globalUrl}`);
   }
   const includeCanvas = process.env.NAPKIN_TRIGGER_INCLUDE_CANVAS === "true";
+  const defaultCompactTriggers = process.env.NAPKIN_COMPACT_TRIGGERS === "true";
   wss.on("agent_trigger", async (trigger: AgentTrigger) => {
-    const url = resolveWebhookUrl(sessions);
+    let url: URL | null = null;
+    if (trigger.webhook_url) {
+      try {
+        url = new URL(trigger.webhook_url);
+      } catch {
+        url = null;
+      }
+    } else if (globalUrl) {
+      try {
+        url = new URL(globalUrl);
+      } catch {
+        url = null;
+      }
+    }
     if (!url) return; // No webhook configured and no session webhook.
-    const session = sessions.getActiveSession();
+    const compactTriggers = trigger.compact_triggers ?? defaultCompactTriggers;
     const message = trigger.message
       ?? `[napkin] Canvas ${trigger.source === "debounce" ? "updated (idle)" : "event"}`;
     const payload: WebhookPayload = {
@@ -138,15 +196,20 @@ export function startWebhookDelivery(
       timestamp: trigger.timestamp,
       message,
     };
-    if (session) {
-      payload.session_id = session.sessionId;
-    }
+    if (trigger.session_id) payload.session_id = trigger.session_id;
     if (trigger.changed_element_ids && trigger.changed_element_ids.length > 0) {
       payload.changed_element_ids = trigger.changed_element_ids;
-      // Embed full element data so the agent skips the get_canvas_diff round-trip.
       const allElements = wss.getCanvasElements();
-      const changedSet = new Set(trigger.changed_element_ids);
-      payload.changed_elements = allElements.filter((el) => changedSet.has(el.id));
+      if (compactTriggers) {
+        payload.changed_elements_compact = buildCompactChangedElements(
+          trigger.changed_element_ids,
+          allElements as Array<Record<string, unknown>>
+        );
+      } else {
+        // Embed full element data so the agent skips the get_canvas_diff round-trip.
+        const changedSet = new Set(trigger.changed_element_ids);
+        payload.changed_elements = allElements.filter((el) => changedSet.has(el.id));
+      }
     }
     if (trigger.change_summary) {
       payload.change_summary = trigger.change_summary;

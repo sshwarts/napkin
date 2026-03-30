@@ -11,7 +11,7 @@ export { genIndex };
 /**
  * Add a labeled node to the canvas. Server handles placement.
  */
-export declare function addNode(wss: CanvasWebSocketServer, label: string, shape?: string, style?: Record<string, unknown>, near?: string): string;
+export declare function addNode(wss: CanvasWebSocketServer, label: string, shape?: string, style?: Record<string, unknown>, near?: string, metadata?: Record<string, unknown>): string;
 /**
  * Connect two nodes with an arrow. Server computes binding points.
  */
@@ -45,7 +45,7 @@ export declare function styleElement(wss: CanvasWebSocketServer, id: string, sty
 /**
  * Add a floating text label near an element.
  */
-export declare function addLabel(wss: CanvasWebSocketServer, text: string, nearId: string): string | {
+export declare function addLabel(wss: CanvasWebSocketServer, text: string, nearId: string, metadata?: Record<string, unknown>): string | {
     error: string;
 };
 /**

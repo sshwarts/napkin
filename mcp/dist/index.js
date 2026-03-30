@@ -27,28 +27,28 @@ let sharedSessionManager;
 const SERVER_INSTRUCTIONS = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
 
 ## Getting started
-1. Call start_session() with your conversation identifier (e.g. your chat JID or channel ID) as session_id, and a webhook_url where canvas events should be POSTed. This ensures triggers route back to the correct conversation.
+1. Call start_session() with your conversation identifier (e.g. your chat JID or channel ID) as session_id, and a webhook_url where canvas events should be POSTed. Set compact_triggers: true to reduce webhook payload size. This ensures triggers route back to the correct conversation.
 2. Use get_canvas() to read the current canvas as structured data (nodes, edges, zones, thought bubbles).
 3. Use the intent API to draw: add_node(), connect(), move(), resize(), style(), add_label(), delete_element(). No coordinates or JSON construction needed.
 4. Call layout() to auto-arrange nodes after adding them.
 
 ## Drawing (Intent API)
 Use these tools instead of update_canvas for most operations — they're 10-20x smaller payloads and require no coordinate math:
-- **add_node(label, shape?, style?, near?)** — creates a labeled node, server finds open space
+- **add_node(label, shape?, style?, near?, metadata?)** — creates a labeled node, server finds open space. Optional metadata stored as customData (invisible in UI, returned in get_canvas)
 - **connect(from_id, to_id, label?)** — creates an arrow with proper bindings
 - **move(id, dx, dy)** — relative offset, moves bound text too
 - **resize(id, width?, height?)** — maintains center position
 - **style(id, style)** — color, fill, opacity, strokeStyle changes
-- **add_label(text, near_id)** — floating text near an element
+- **add_label(text, near_id, metadata?)** — floating text near an element
 - **delete_element(id)** — removes element and bound text
-- **patch_canvas(patches)** — modify any element field without resending the full definition
-- **layout(style?)** — auto-arrange all nodes/edges (TB, LR, tree, hierarchy)
+- **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
+- **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge (TB, LR, tree, hierarchy)
 
-Only use update_canvas() for new elements not covered by add_node/connect. Always send complete element definitions to update_canvas — partial objects break elements.
+Only use update_canvas() for new elements not covered by add_node/connect. Pass elements as an array of objects (not a JSON-encoded string). Always send complete element definitions to update_canvas — partial objects break elements.
 
 ## Other tools
 - **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
-- **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties.
+- **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties, and metadata (from customData) when present.
 - **Efficient deltas**: Trigger payloads include changed_element_ids, changed_elements (full data), and change_summary (human-readable). Use these instead of calling get_canvas_diff.
 - **Vision**: describe_elements() renders element(s) to PNG and sends to a vision model. Only available when ANTHROPIC_API_KEY is configured.
 - **Animation**: animate_element() interpolates properties at ~30fps. Use commit parameter for atomic final state.
@@ -66,7 +66,7 @@ Set debounce_ms in start_session() to match activity type:
 When the human draws on the canvas and stops, a debounce trigger fires after a quiet period. Triggers are only fired for human-originated changes — your own writes (update_canvas, animate_element, thought bubbles) never trigger a wakeup.
 
 If you set a webhook URL (via start_session), triggers are POSTed as JSON with:
-- changed_element_ids and changed_elements — act immediately, no round-trip
+- changed_element_ids and changed_elements (or changed_elements_compact when compact_triggers is enabled) — act immediately, no round-trip
 - change_summary — human-readable description (e.g. "moved Server +50px right; added rectangle")
 - change_type — "semantic" (new/deleted/text/connection) or "cosmetic" (small nudge/style tweak). Skip cosmetic triggers if you only care about structural changes.
 
@@ -80,16 +80,18 @@ If you set a webhook URL (via start_session), triggers are POSTed as JSON with:
 
 ## update_canvas: server fills defaults
 When using update_canvas() for new elements, you only need to send the fields that matter. The server auto-fills all missing fields with type-aware defaults. A minimal element needs just:
-- id, type, x, y, width, height (required)
+- type, x, y (required)
+- id (optional — auto-generated if missing)
+- width, height (optional — type-specific defaults: rectangle/ellipse 160×60, diamond 160×100, text auto-computed)
 - strokeColor, backgroundColor (optional — defaults to black stroke, transparent fill)
 - text (for text elements)
 
-Example — a teal circle in 123 bytes:
-  { "id": "body", "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "strokeColor": "#0d9488", "backgroundColor": "#0d9488" }
+Example — a teal circle in 82 bytes:
+  { "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "backgroundColor": "#0d9488" }
 
-The server fills: angle, seed, version, index, roundness, opacity, strokeWidth, fillStyle, strokeStyle, groupIds, boundElements, frameId, link, locked, and type-specific fields (lineHeight/autoResize/fontFamily for text, points/arrowheads for arrows).
+The server fills: id, angle, seed, version, index, roundness (type-aware: rounded corners for shapes, smooth curves for arrows), opacity, strokeWidth, fillStyle, strokeStyle, groupIds, boundElements, frameId, link, locked, and type-specific fields (lineHeight/autoResize/fontFamily for text, points/arrowheads for arrows).
 
-**Text elements:** Do NOT set fontFamily, width, or height — let the server default them. The server uses fontFamily 5 (Excalidraw's current default font) and calculates height from fontSize * lineHeight * lineCount. Setting wrong fontFamily or width values causes text to render with incorrect metrics. Just send: id, type, x, y, text, fontSize.
+**Text elements:** Do NOT set fontFamily, width, or height — let the server default them. The server uses fontFamily 5 (Excalidraw's current default font) and calculates height from fontSize * lineHeight * lineCount. Setting wrong fontFamily or width values causes text to render with incorrect metrics. Just send: type, x, y, text, fontSize.
 
 For modifying existing elements, use patch_canvas() or the intent tools (move, resize, style) instead.`;
 function buildMcpServer(wss) {
@@ -164,15 +166,10 @@ async function main() {
     wss.start();
     // 2. Initialize the session manager (restores from disk).
     sharedSessionManager = new SessionManager();
-    // Apply persisted debounce override if a session had one.
-    const restoredSessions = sharedSessionManager.listSessions();
-    const customDebounce = restoredSessions.find((s) => s.debounceMs !== undefined);
-    if (customDebounce?.debounceMs !== undefined) {
-        wss.setDebounceMs(customDebounce.debounceMs);
-        console.error(`[napkin] Restored debounce override: ${customDebounce.debounceMs}ms`);
-    }
+    // Restore session trigger routing/debounce state in WebSocket runtime.
+    wss.restoreSessionTriggers(sharedSessionManager.listSessions());
     // 3. Start webhook delivery if configured.
-    startWebhookDelivery(wss, sharedSessionManager);
+    startWebhookDelivery(wss);
     // 4. Start the MCP server with the configured transport.
     const transport = process.env.NAPKIN_TRANSPORT ?? "http";
     if (transport === "http") {

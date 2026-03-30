@@ -98,9 +98,12 @@ export type WsMessage = CanvasUpdate | CanvasPatch | CanvasReplace | ChatMessage
 // --- Agent trigger types ---
 
 export interface AgentTrigger {
+  session_id?: string;
   source: "debounce" | "chat" | "reconnect";
   message?: string;
   timestamp: number;
+  webhook_url?: string;
+  compact_triggers?: boolean;
   changed_element_ids?: string[];
   change_summary?: string;
   change_type?: "semantic" | "cosmetic";

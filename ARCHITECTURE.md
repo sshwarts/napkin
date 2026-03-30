@@ -98,8 +98,8 @@ napkin/
 | `style` | Apply style changes (color, fill, opacity, strokeStyle) |
 | `add_label` | Add floating text near an element |
 | `delete_element` | Delete element and its bound text |
-| `patch_canvas` | Modify existing elements with partial patches — 10-20x smaller than full updates |
-| `update_canvas` | Add new elements with full definitions (use intent API for modifications) |
+| `patch_canvas` | Modify existing elements with partial patches (array input, not JSON string) — 10-20x smaller than full updates |
+| `update_canvas` | Add new elements with full definitions (array input, not JSON string). Use intent API for modifications |
 | `clear_canvas` | Remove all elements |
 
 ### Layout
@@ -130,7 +130,7 @@ napkin/
 ### Sessions
 | Tool | Purpose |
 |------|---------|
-| `start_session` | Begin a whiteboard session with channel ID, webhook URL, and optional debounce override |
+| `start_session` | Begin a whiteboard session with channel ID, webhook URL, optional debounce override, and optional compact trigger payload mode |
 | `end_session` | End a session |
 
 ---
@@ -159,11 +159,11 @@ On new WebSocket connection, the server immediately sends `canvas_replace` with 
 
 Napkin has three levels of write API, from highest to lowest abstraction:
 
-**Intent API** (recommended) — `add_node`, `connect`, `move`, `resize`, `style`, `add_label`, `delete_element`. Agent describes *what* it wants; server handles coordinates, bindings, and element construction. A 3-node diagram takes ~277 bytes across 6 calls.
+**Intent API** (recommended) — `add_node`, `connect`, `move`, `resize`, `style`, `add_label`, `delete_element`. Agent describes *what* it wants; server handles coordinates, bindings, and element construction. `connect` uses directional edge selection (left/right for LR, top/bottom for TB) so arrows are clipped correctly on initial render. A 3-node diagram takes ~277 bytes across 6 calls.
 
-**patch_canvas** — Modify existing elements with partial patches. Send `[{ id: "X", backgroundColor: "#red" }]` instead of the full 600-byte element. 10-20x payload reduction. Server merges with cached state.
+**patch_canvas** — Modify existing elements with partial patches. Send an array directly, e.g. `[{ id: "X", backgroundColor: "#red" }]` (not a JSON-encoded string). 10-20x payload reduction. Server merges with cached state.
 
-**update_canvas** — Raw element replacement. Required for new elements not covered by the intent API. Agent constructs full Excalidraw element JSON. Use sparingly.
+**update_canvas** — Raw element replacement. Required for new elements not covered by the intent API. Send an array directly, e.g. `[{ type: "rectangle", x: 100, y: 120, width: 160, height: 60 }]` (not a JSON-encoded string). Use sparingly.
 
 **Layout** — `layout(style)` runs Dagre on all nodes/edges and repositions them. Call after adding nodes and connections. No coordinate math needed.
 
@@ -223,7 +223,7 @@ An agent calls `start_session({ session_id: "slack:C12345" })` when initiating a
 
 Sessions auto-expire after `NAPKIN_SESSION_TTL_MS` (default 2 hours) of inactivity. No explicit close required, but `end_session` is available.
 
-A per-session `webhook_url` can override the global `NAPKIN_TRIGGER_WEBHOOK`. A per-session `debounce_ms` can override the global debounce interval — use lower values for games/discrete interactions (e.g. 300ms), higher for drawing sessions (e.g. 3000ms).
+A per-session `webhook_url` can override the global `NAPKIN_TRIGGER_WEBHOOK`. A per-session `debounce_ms` applies independently per active session (no global override/stomp) — use lower values for games/discrete interactions (e.g. 300ms), higher for drawing sessions (e.g. 3000ms). A per-session `compact_triggers` flag can switch webhook payloads from full `changed_elements` to token-efficient `changed_elements_compact`.
 
 **Persistence:** Sessions are saved to `~/.napkin/sessions.json` and restored on server restart. Debounce overrides are also restored.
 
@@ -237,11 +237,13 @@ The browser sends `canvas_update` on every Excalidraw `onChange`, including mid-
 
 **Three trigger sources:**
 
-1. **Debounce** — canvas quiet for `AGENT_TRIGGER_DEBOUNCE_MS` (default 3000ms, overridable per-session) → passive trigger fires. Agent writes (`update_canvas`) do NOT restart the timer.
+1. **Debounce** — canvas quiet for `AGENT_TRIGGER_DEBOUNCE_MS` (default 3000ms, overridable per-session) → passive trigger fires. Timers are tracked per session. Agent writes (`update_canvas`) do NOT restart timers.
 2. **Chat message** — `chat_message` injected by agent framework → immediate trigger, cancels pending debounce.
 3. **Poll** — agent calls `get_pending_triggers` to drain queued triggers (pull mode, always available).
 
-**Webhook delivery (push mode):** When `NAPKIN_TRIGGER_WEBHOOK` is set (or a session has a `webhook_url`), triggers are POSTed as JSON:
+**Webhook delivery (push mode):** When `NAPKIN_TRIGGER_WEBHOOK` is set (or a session has a `webhook_url`), triggers are POSTed as JSON.
+
+With multiple active sessions, triggers are fanned out per session. Each session receives its own payload with its own `session_id` and routing context:
 
 ```json
 {
@@ -259,9 +261,11 @@ The `message` field is always present (required by nanoclaw/OpenClaw webhook rec
 
 `changed_element_ids` lists only the elements that changed since the last trigger. `changed_elements` contains the full element data for those IDs — the agent can act immediately without a `get_canvas_diff` round-trip.
 
+When compact mode is enabled (`start_session({ compact_triggers: true })` or `NAPKIN_COMPACT_TRIGGERS=true`), payloads include `changed_elements_compact` instead of `changed_elements`. Each compact element includes only: `id`, `type`, `label` (if available), `from`/`to` for arrows, `status`, and `metadata` (`customData`).
+
 The `canvas` field is included when `NAPKIN_TRIGGER_INCLUDE_CANVAS=true`. Retry: up to 2 retries with exponential backoff (1s, 2s).
 
-**Echo suppression:** Agent writes (`update_canvas`, `animate_element`) do not trigger webhooks. The server tracks which element IDs were written via MCP and suppresses browser echoes of those writes for 500ms. Only genuine human-originated canvas changes fire triggers.
+**Echo suppression:** Agent writes (`update_canvas`, `animate_element`) do not trigger webhooks. The server tracks which element IDs were written via MCP and suppresses browser echoes of those writes for 2000ms. Only genuine human-originated canvas changes fire triggers.
 
 ---
 
@@ -281,6 +285,7 @@ All configuration is via environment variables. Nothing is required except `ANTH
 | `GRID_CELL_SIZE` | `200` | Spatial analysis grid cell size (px) |
 | `PROXIMITY_CONFIDENCE_THRESHOLD` | `0.75` | Below = inferred, above = direct annotation |
 | `NAPKIN_TRIGGER_WEBHOOK` | — | URL to POST triggers to (unset = pull-only) |
+| `NAPKIN_COMPACT_TRIGGERS` | `false` | Use compact trigger payloads (`changed_elements_compact`) by default |
 | `NAPKIN_TRIGGER_INCLUDE_CANVAS` | `false` | Include structured canvas in webhook payload |
 | `NAPKIN_SESSION_TTL_MS` | `7200000` | Session auto-expire after inactivity (ms) |
 | `NAPKIN_SESSION_PATH` | `~/.napkin/sessions.json` | Session persistence file path |
@@ -413,7 +418,7 @@ Add this (adapted for your framework) to your agent's instructions:
 When the napkin MCP server is available, you have a shared Excalidraw whiteboard.
 
 **First step — always call:**
-  start_session({ session_id: "<your channel ID>", webhook_url: "<your webhook URL>" })
+  start_session({ session_id: "<your channel ID>", webhook_url: "<your webhook URL>", compact_triggers: true })
 
 **Drawing — use the intent API (no coordinates needed):**
   add_node, connect, move, resize, style, add_label, delete_element, patch_canvas, layout
@@ -423,13 +428,14 @@ When the napkin MCP server is available, you have a shared Excalidraw whiteboard
   patch_canvas([{ id: "...", customData: { status: "done" } }])
   get_canvas() returns metadata on nodes/edges when present.
 
-**When using update_canvas for new elements**, only send the meaningful fields:
+**When using update_canvas for new elements**, send an array of objects (not a JSON string) and include only the meaningful fields:
   type, x, y, and optionally width/height/strokeColor/backgroundColor/text.
+  Example: update_canvas({ elements: [{ type: "rectangle", x: 120, y: 240, width: 180, height: 80 }] })
   The server auto-fills all other fields (id, angle, seed, version, index, roundness, opacity, etc.).
 
 **On webhook trigger:**
   1. First action: add_thought_bubble() — acknowledge visually before processing
-  2. Use changed_elements from the payload — no round-trip needed
+  2. Use changed_elements_compact (or changed_elements) from the payload — no round-trip needed
   3. Skip triggers with change_type "cosmetic" if you only care about structural changes
   4. Skip triggers with source "reconnect" — browser refresh, not human edits
 
