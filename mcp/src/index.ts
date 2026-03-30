@@ -38,12 +38,12 @@ const SERVER_INSTRUCTIONS = `Napkin is a shared visual canvas (Excalidraw) for c
 
 ## Drawing (Intent API)
 Use these tools instead of update_canvas for most operations — they're 10-20x smaller payloads and require no coordinate math:
-- **add_node(label, shape?, style?, near?)** — creates a labeled node, server finds open space
+- **add_node(label, shape?, style?, near?, metadata?)** — creates a labeled node, server finds open space. Optional metadata stored as customData (invisible in UI, returned in get_canvas)
 - **connect(from_id, to_id, label?)** — creates an arrow with proper bindings
 - **move(id, dx, dy)** — relative offset, moves bound text too
 - **resize(id, width?, height?)** — maintains center position
 - **style(id, style)** — color, fill, opacity, strokeStyle changes
-- **add_label(text, near_id)** — floating text near an element
+- **add_label(text, near_id, metadata?)** — floating text near an element
 - **delete_element(id)** — removes element and bound text
 - **patch_canvas(patches)** — modify any element field without resending the full definition
 - **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge (TB, LR, tree, hierarchy)
@@ -52,7 +52,7 @@ Only use update_canvas() for new elements not covered by add_node/connect. Alway
 
 ## Other tools
 - **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
-- **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties.
+- **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties, and metadata (from customData) when present.
 - **Efficient deltas**: Trigger payloads include changed_element_ids, changed_elements (full data), and change_summary (human-readable). Use these instead of calling get_canvas_diff.
 - **Vision**: describe_elements() renders element(s) to PNG and sends to a vision model. Only available when ANTHROPIC_API_KEY is configured.
 - **Animation**: animate_element() interpolates properties at ~30fps. Use commit parameter for atomic final state.
