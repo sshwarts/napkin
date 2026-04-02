@@ -392,6 +392,19 @@ When the napkin MCP server is available, you have a shared Excalidraw whiteboard
 
 ---
 
+## Troubleshooting
+
+**Canvas appears blank after agent draws something**
+The browser is the source of truth. If it reconnected between your agent's write and the next read, the server cache was reset. Call `start_session` again and redraw.
+
+**Webhook isn't firing**
+Confirm `start_session` was called with the correct `session_id` and `webhook_url`. Triggers are suppressed on agent writes — only human canvas edits fire them.
+
+**Agent can't see what I drew**
+Check `get_canvas_diff` with a recent timestamp. If the browser tab was closed and reopened, the canvas state was re-synced from the browser — call `get_canvas` for a fresh read.
+
+**`export_canvas` produces a blank file**
+Export immediately after drawing — don't let the browser reconnect between the write and export calls. Use an absolute path on the host machine.
 
 ## Design Decisions
 
@@ -402,6 +415,11 @@ When the napkin MCP server is available, you have a shared Excalidraw whiteboard
 **Echo suppression.** Agent writes don't trigger webhooks. The server tracks which element IDs were written by agents and ignores browser echoes of those writes for ~2s. Only genuine human edits fire triggers.
 
 **Per-session isolation.** Each `start_session` call gets its own debounce timer, webhook URL, and trigger context. Multiple agents can share a canvas with independent notification channels.
+
+
+## Contributing
+
+PRs welcome. The most useful directions right now: additional layout engines, integrations with other agent frameworks, and tighter agentic loop patterns. Open an issue first for anything structural.
 
 ## Security
 
