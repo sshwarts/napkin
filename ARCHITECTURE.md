@@ -490,6 +490,17 @@ Excalidraw 0.18.0 has a rendering bug at exactly `zoom.value === 1.0` on Retina/
 
 This was initially misdiagnosed as a text font measurement issue. The visual roughness affected ALL elements equally — text AND shapes — which ruled out font metrics as the cause. Key diagnostic: manually drawn elements looked identical to programmatic ones; zooming to 110% fixed everything.
 
+### Text bounding box measurement
+
+Excalidraw elements created via `updateScene` (the MCP server's write path) don't trigger browser-side font measurement. Text elements render with incorrect bounding boxes until clicked, which forces Excalidraw to recalculate.
+
+**Fix (browser-side):** `App.tsx` runs all incoming elements through `restoreElements` with `refreshDimensions: true` before calling `updateScene`. This triggers `refreshTextDimensions` which measures text with the browser's canvas context. Two corrections are applied after restore:
+
+- **Arrow bindings** — `repairBindings` must be enabled (it gates `refreshDimensions`), but it nullifies bindings to elements not in the incoming set. Arrow bindings are saved before restore and patched back after.
+- **Standalone text position** — `refreshTextDimensions` shifts x/y when dimensions change. The server's intended center point (cx, cy) is captured before restore and used to re-anchor the text after dimensions are corrected.
+
+**Fix (server-side):** Arrow labels in `intent.ts` now use `estimateTextWidth` for initial width instead of a hardcoded 80px, reducing the delta between server estimate and browser measurement.
+
 ### Layout arrow repositioning
 
 After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge based on new node positions. This recompute path shares the same geometry resolver as `connect()`, including vertical bias, which prevents routing drift between initial connect-time arrows and post-layout arrows.

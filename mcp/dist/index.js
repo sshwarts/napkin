@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @file Napkin MCP server entry point.
  *
@@ -30,8 +31,8 @@ const SERVER_INSTRUCTIONS_COMPACT = `Napkin is a shared visual canvas (Excalidra
 Core operating rules:
 1. Call start_session() first with your conversation identifier as session_id and your webhook URL. Use compact_triggers: true.
 2. Prefer intent APIs (add_node, connect, move, resize, style, patch_canvas, apply_intents) over raw JSON construction.
-3. On webhook triggers, use changed_element_ids + changed_elements/changed_elements_compact directly; avoid unnecessary round-trips.
-4. For compact trigger payloads, set compact_triggers: true in start_session.
+3. Always end diagram construction with layout() — prevents node placement drift. Use TB for hierarchies, LR for pipelines/flows.
+4. On webhook triggers, use changed_element_ids + changed_elements/changed_elements_compact directly; avoid unnecessary round-trips.
 5. No webhook? Call get_pending_triggers() to drain queued canvas change events.
 Need full guidance/examples? Call get_server_instructions({ verbose: true }).`;
 const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
@@ -45,64 +46,73 @@ const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidra
 
 ## Drawing (Intent API)
 Use these tools instead of update_canvas for most operations — they're 10-20x smaller payloads and require no coordinate math:
-- **add_node(label, shape?, style?, near?, metadata?)** — creates a labeled node, server finds open space. Optional metadata stored as customData (invisible in UI, returned in get_canvas)
-- **connect(from_id, to_id, label?)** — creates an arrow with proper bindings
-- **move(id, dx, dy)** — relative offset, moves bound text too
-- **resize(id, width?, height?)** — maintains center position
-- **style(id, style)** — color, fill, opacity, strokeStyle changes
-- **add_label(text, near_id, metadata?)** — floating text near an element
-- **delete_element(id)** — removes element and bound text
-- **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
-- **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs and reduces round-trip overhead for multi-step flows.
-- **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge (TB, LR, tree, hierarchy)
+• **add_node(label, shape?, style?, near?, metadata?)** — creates a labeled node, server finds open space. Use near: existing_node_id when adding to an existing canvas — without it, nodes are placed in open space, typically to the right of existing content. Optional metadata stored as customData (invisible in UI, returned in get_canvas).
+• **connect(from_id, to_id, label?)** — creates an arrow with proper bindings. Arrow labels go here — do NOT create a separate text element to annotate a connection.
+• **move(id, dx, dy)** — relative offset, moves bound text too
+• **resize(id, width?, height?)** — maintains center position
+• **style(id, style)** — color, fill, opacity, strokeStyle changes
+• **add_label(text, near_id, metadata?)** — floating text anchored near a specific element. Always provide near_id — unanchored labels drift after layout and clutter the canvas.
+• **delete_element(id)** — removes element and bound text
+• **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
+• **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs. Canonical pattern: batch all node/connect/add_label operations with layout as the final op. Any canvas call outside the batch (after apply_intents returns) will not be repositioned by layout.
+• **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge. TB (default) for hierarchies/org charts, LR for pipelines/flows/sequences. Must be the last op inside apply_intents — not a separate call after the batch.
 
 Only use update_canvas() for new elements not covered by add_node/connect. Pass elements as an array of objects (not a JSON-encoded string). Always send complete element definitions to update_canvas — partial objects break elements.
 
+## Annotations: use the right tool
+• Connection labels → connect(from, to, label) — not a separate text element
+• Node annotation → add_label(text, near_id: node_id) — always anchor to the node
+• General canvas note → add_label(text, near_id: nearest_relevant_element) — always anchor, never free-floating
+• Avoid orphaned text: floating labels without a near_id drift after layout and cannot be repositioned by layout()
+• add_label must be inside the same apply_intents batch as layout, placed after layout, using $ref to reference the anchor node's ID — a label added after apply_intents returns will not be repositioned
+
 ## Other tools
-- **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
-- **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties, and metadata (from customData) when present.
-- **Compact reads**: get_canvas_summary() returns nodes/edges only. Node types use the same vocabulary as get_canvas (box, ellipse, diamond). Cheapest mode: include_metadata=false and include_status=false.
-- **Path traversal**: trace_path() returns BFS paths/visited nodes from a start node (id or label) with downstream/upstream/both traversal and optional filters. V1 is read-only.
-- **Efficient deltas**: Trigger payloads include changed_element_ids, changed_elements (full data), and change_summary (human-readable). Use these instead of calling get_canvas_diff.
-- **Vision**: describe_elements() renders element(s) to PNG and sends to a vision model. Only available when ANTHROPIC_API_KEY is configured.
-- **Animation**: animate_element() interpolates properties at ~30fps. Use commit parameter for atomic final state.
-- **Export**: export_canvas() saves to .excalidraw/.svg/.png. Relative paths resolve against NAPKIN_EXPORT_DIR.
+• **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
+• **Spatial analysis**: get_canvas() returns semantically analyzed structure — nodes, edges, zones, proximity-inferred properties, and metadata (from customData) when present.
+• **Compact reads**: get_canvas_summary() returns nodes/edges only. Node types use the same vocabulary as get_canvas (box, ellipse, diamond). Cheapest mode: include_metadata=false and include_status=false.
+• **Path traversal**: trace_path() returns BFS paths/visited nodes from a start node (id or label) with downstream/upstream/both traversal and optional filters. V1 is read-only.
+• **Efficient deltas**: Trigger payloads include changed_element_ids, changed_elements (full data), and change_summary (human-readable). Use these instead of calling get_canvas_diff.
+• **Vision**: describe_elements() renders element(s) to PNG and sends to a vision model. Only available when ANTHROPIC_API_KEY is configured.
+• **Animation**: animate_element() interpolates properties at ~30fps. Use commit parameter for atomic final state.
+• **Export**: export_canvas() saves to .excalidraw/.svg/.png. Relative paths resolve against NAPKIN_EXPORT_DIR.
 
 ## Sessions
 Your session_id appears in all webhook trigger payloads, allowing the receiver to route canvas events back to your active conversation. Sessions auto-expire after 2 hours of inactivity. Call end_session() when you're done to free resources.
 
 Set debounce_ms in start_session() to match activity type:
-- Drawing/whiteboarding: 3000ms (default) — filters mid-stroke noise
-- Games/discrete interactions: 300-500ms — faster response to piece moves
-- Passive monitoring: 5000ms+ — minimal wakeups
+• Drawing/whiteboarding: 3000ms (default) — filters mid-stroke noise
+• Games/discrete interactions: 300-500ms — faster response to piece moves
+• Passive monitoring: 5000ms+ — minimal wakeups
 
 ## Triggers
 When the human draws on the canvas and stops, a debounce trigger fires after a quiet period. Triggers are only fired for human-originated changes — your own writes (update_canvas, animate_element, thought bubbles) never trigger a wakeup.
 
 If you set a webhook URL (via start_session), triggers are POSTed as JSON with:
-- changed_element_ids and changed_elements (or changed_elements_compact when compact_triggers is enabled) — act immediately, no round-trip
-- change_summary — human-readable description (e.g. "moved Server +50px right; added rectangle")
-- change_type — "semantic" (new/deleted/text/connection) or "cosmetic" (small nudge/style tweak). Skip cosmetic triggers if you only care about structural changes.
+• changed_element_ids and changed_elements (or changed_elements_compact when compact_triggers is enabled) — act immediately, no round-trip
+• change_summary — human-readable description (e.g. "moved Server +50px right; added rectangle")
+• change_type — "semantic" (new/deleted/text/connection) or "cosmetic" (small nudge/style tweak). Skip cosmetic triggers if you only care about structural changes.
+
+**No webhook?** Call get_pending_triggers() to drain queued trigger events, or get_canvas_diff(since: timestamp) to see what changed since your last read.
 
 ## Token efficiency
-- **Show before think**: On a webhook trigger, your first action should be add_thought_bubble() to acknowledge the human's change visually. Then process. The user sees immediate feedback while you reason.
-- Use changed_elements from the webhook payload instead of calling get_canvas() or get_canvas_diff() — the data is already there.
-- Use apply_intents() for multi-step construction or animation cycles to minimize per-call protocol overhead.
-- Use animate_element with commit to combine animation + position update in one call.
-- Ignore triggers with source "reconnect" — these are browser reconnection events, not human edits. Don't poll or read the canvas on reconnect unless you need to verify state.
-- Call end_session() when the whiteboarding is done. Don't leave sessions open indefinitely — they generate reconnect triggers on every browser refresh.
-- Prefer get_canvas_diff(since) over get_canvas() when you only need to see what changed.
+• **Show before think**: On a webhook trigger, your first action should be add_thought_bubble() to acknowledge the human's change visually. Then process. The user sees immediate feedback while you reason.
+• Use changed_elements from the webhook payload instead of calling get_canvas() or get_canvas_diff() — the data is already there.
+• Use apply_intents() for multi-step construction or animation cycles to minimize per-call protocol overhead.
+• Use animate_element with commit to combine animation + position update in one call.
+• Ignore triggers with source "reconnect" — these are browser reconnection events, not human edits. Don't poll or read the canvas on reconnect unless you need to verify state.
+• Call end_session() when the whiteboarding is done. Don't leave sessions open indefinitely — they generate reconnect triggers on every browser refresh.
+• Prefer get_canvas_diff(since) over get_canvas() when you only need to see what changed.
 
 ## update_canvas: server fills defaults
 When using update_canvas() for new elements, you only need to send the fields that matter. The server auto-fills all missing fields with type-aware defaults. A minimal element needs just:
-- type, x, y (required)
-- id (optional — auto-generated if missing)
-- width, height (optional — type-specific defaults: rectangle/ellipse 160×60, diamond 160×100, text auto-computed)
-- strokeColor, backgroundColor (optional — defaults to black stroke, transparent fill)
-- text (for text elements)
+• type, x, y (required)
+• id (optional — auto-generated if missing)
+• width, height (optional — type-specific defaults: rectangle/ellipse 160×60, diamond 160×100, text auto-computed)
+• strokeColor, backgroundColor (optional — defaults to black stroke, transparent fill)
+• text (for text elements)
 
 Example — a teal circle in 82 bytes:
-  { "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "backgroundColor": "#0d9488" }
+  { "type": "ellipse", "x": 165, "y": 290, "width": 170, "height": 210, "backgroundColor": "#0D9488" }
 
 The server fills: id, angle, seed, version, index, roundness (type-aware: rounded corners for shapes, smooth curves for arrows), opacity, strokeWidth, fillStyle, strokeStyle, groupIds, boundElements, frameId, link, locked, and type-specific fields (lineHeight/autoResize/fontFamily for text, points/arrowheads for arrows).
 

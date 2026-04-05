@@ -3,32 +3,89 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Excalidraw, exportToSvg, exportToBlob } from "@excalidraw/excalidraw";
+import { Excalidraw, exportToSvg, exportToBlob, restoreElements } from "@excalidraw/excalidraw";
+import type { ExcalidrawElement, PointBinding } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
 import { CanvasSync } from "./canvas-sync";
 
 // Excalidraw API type.
 interface ExcalidrawAPI {
   updateScene: (scene: { elements: unknown[]; appState?: Record<string, unknown> }) => void;
-  getSceneElements: () => unknown[];
+  getSceneElements: () => ExcalidrawElement[];
   getAppState: () => Record<string, unknown>;
   getFiles: () => Record<string, unknown>;
   scrollToContent: () => void;
   refresh: () => void;
 }
 
+/** Arrow binding fields preserved across restoreElements. */
+type ArrowEl = ExcalidrawElement & {
+  startBinding: PointBinding | null;
+  endBinding: PointBinding | null;
+};
+
+/** Text element fields used for center-anchored dimension refresh. */
+type TextEl = ExcalidrawElement & {
+  containerId: string | null;
+};
+
+/**
+ * Run restoreElements on incoming elements to get correct font metrics.
+ *
+ * repairBindings must be true (refreshDimensions is gated behind it), so we
+ * save and restore arrow bindings that get incorrectly nullified when the
+ * binding target isn't in the incoming set.  For standalone text, we preserve
+ * the server-intended center point since the corrected dimensions shift x/y.
+ */
+function restoreIncoming(incoming: ExcalidrawElement[]): ExcalidrawElement[] {
+  // 1. Capture server-intended center for standalone text.
+  const centerById = new Map<string, { cx: number; cy: number }>();
+  for (const el of incoming) {
+    if (el.type === "text" && !(el as TextEl).containerId) {
+      centerById.set(el.id, { cx: el.x + el.width / 2, cy: el.y + el.height / 2 });
+    }
+  }
+  // 2. Capture arrow bindings before restore clobbers them.
+  const bindingsById = new Map<string, { start: PointBinding | null; end: PointBinding | null }>();
+  for (const el of incoming) {
+    if (el.type === "arrow") {
+      const arrow = el as ArrowEl;
+      bindingsById.set(el.id, { start: arrow.startBinding, end: arrow.endBinding });
+    }
+  }
+  // 3. Restore with repairBindings (required to enable refreshDimensions).
+  const restored = restoreElements(incoming, null, {
+    repairBindings: true,
+    refreshDimensions: true,
+  }) as ExcalidrawElement[];
+  // 4. Patch back arrow bindings and re-anchor standalone text.
+  return restored.map((el) => {
+    const bindings = bindingsById.get(el.id);
+    if (bindings) {
+      const arrow = el as ArrowEl;
+      return { ...el, startBinding: bindings.start ?? arrow.startBinding, endBinding: bindings.end ?? arrow.endBinding };
+    }
+    const center = centerById.get(el.id);
+    if (center) {
+      return { ...el, x: center.cx - el.width / 2, y: center.cy - el.height / 2 };
+    }
+    return el;
+  });
+}
+
 /**
  * Apply a server update to the Excalidraw scene.
  */
 function applyUpdate(api: ExcalidrawAPI, elements: unknown[], mode: "patch" | "replace"): void {
+  const incoming = restoreIncoming(elements as ExcalidrawElement[]);
   if (mode === "replace") {
-    api.updateScene({ elements });
+    api.updateScene({ elements: incoming });
     api.scrollToContent();
   } else {
     const wasPreviouslyEmpty = api.getSceneElements().length === 0;
-    const current = api.getSceneElements() as Array<{ id: string }>;
+    const current = api.getSceneElements();
     const currentById = new Map(current.map((el) => [el.id, el]));
-    for (const el of elements as Array<{ id: string }>) {
+    for (const el of incoming) {
       currentById.set(el.id, el);
     }
     api.updateScene({

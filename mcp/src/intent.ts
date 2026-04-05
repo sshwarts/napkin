@@ -396,13 +396,15 @@ export function connect(
   if (label) {
     const labelId = genId();
     boundElements.push({ id: labelId, type: "text" });
+    const labelWidth = Math.max(80, estimateTextWidth(label, 14) + 10);
+    const labelHeight = 20;
     const labelEl: ExcalidrawElement = {
       id: labelId,
       type: "text",
-      x: arrowX + dx / 2 - 40,
-      y: arrowY + dy / 2 - 10,
-      width: 80,
-      height: 20,
+      x: arrowX + dx / 2 - labelWidth / 2,
+      y: arrowY + dy / 2 - labelHeight / 2,
+      width: labelWidth,
+      height: labelHeight,
       strokeColor: "#1e1e1e",
       backgroundColor: "transparent",
       fillStyle: "solid",

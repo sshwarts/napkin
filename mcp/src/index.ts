@@ -59,8 +59,8 @@ Use these tools instead of update_canvas for most operations — they're 10-20x 
 • **add_label(text, near_id, metadata?)** — floating text anchored near a specific element. Always provide near_id — unanchored labels drift after layout and clutter the canvas.
 • **delete_element(id)** — removes element and bound text
 • **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
-• **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs. Canonical pattern: batch all node/connect operations with layout as the final op to prevent placement drift and minimize round-trips.
-• **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge. TB (default) for hierarchies/org charts, LR for pipelines/flows/sequences. Always call as the final step of diagram construction.
+• **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs. Canonical pattern: batch all node/connect/add_label operations with layout as the final op. Any canvas call outside the batch (after apply_intents returns) will not be repositioned by layout.
+• **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge. TB (default) for hierarchies/org charts, LR for pipelines/flows/sequences. Must be the last op inside apply_intents — not a separate call after the batch.
 
 Only use update_canvas() for new elements not covered by add_node/connect. Pass elements as an array of objects (not a JSON-encoded string). Always send complete element definitions to update_canvas — partial objects break elements.
 
@@ -69,6 +69,7 @@ Only use update_canvas() for new elements not covered by add_node/connect. Pass 
 • Node annotation → add_label(text, near_id: node_id) — always anchor to the node
 • General canvas note → add_label(text, near_id: nearest_relevant_element) — always anchor, never free-floating
 • Avoid orphaned text: floating labels without a near_id drift after layout and cannot be repositioned by layout()
+• add_label must be inside the same apply_intents batch as layout, placed after layout, using $ref to reference the anchor node's ID — a label added after apply_intents returns will not be repositioned
 
 ## Other tools
 • **Thought bubbles**: add_thought_bubble() to propose, confirm_thought_bubble() to make permanent, dismiss_thought_bubble() to remove.
