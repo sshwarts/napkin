@@ -143,8 +143,8 @@ export function layoutCanvas(wss, style = "TB", rootId) {
             width: Math.abs(dx),
             height: Math.abs(dy),
             points: [[0, 0], [dx, dy]],
-            startBinding: null,
-            endBinding: null,
+            startBinding: startId ? { elementId: startId, focus: 0, gap: 1 } : null,
+            endBinding: endId ? { elementId: endId, focus: 0, gap: 1 } : null,
             customData: metadataPatch,
         });
         // Also reposition the arrow's bound text label if it has one.

@@ -494,7 +494,7 @@ This was initially misdiagnosed as a text font measurement issue. The visual rou
 
 After `layout()` repositions nodes via Dagre, arrows are recomputed edge-to-edge based on new node positions. This recompute path shares the same geometry resolver as `connect()`, including vertical bias, which prevents routing drift between initial connect-time arrows and post-layout arrows.
 
-To prevent Excalidraw from re-anchoring one endpoint unexpectedly after server-side recompute, layout-updated arrows are written as authoritative geometry (`x`, `y`, `points`) with bindings cleared (`startBinding`/`endBinding = null`). Logical edge identity is preserved in `customData.from` / `customData.to`, and spatial analysis uses that metadata as a fallback when bindings are absent.
+Layout-updated arrows are written with authoritative geometry (`x`, `y`, `points`) AND restored bindings (`startBinding`/`endBinding` with `focus: 0, gap: 1`). Excalidraw may slightly adjust arrow endpoints on first interactive drag, but this preserves the critical behavior of arrows following nodes when users drag them. Logical edge identity is also preserved in `customData.from` / `customData.to`, and spatial analysis uses that metadata as a fallback when bindings are absent.
 
 Excalidraw does not automatically reposition bound arrows when nodes move via `updateScene` — only interactive drag operations trigger arrow following.
 

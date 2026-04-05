@@ -61,6 +61,6 @@ test("layout recomputes arrow geometry when bindings are null but customData has
   assert.deepEqual(result, { ok: true, nodeCount: 2 });
   const arrowPatch = wss.lastPatches.find((patch) => patch.id === arrow.id);
   assert.ok(arrowPatch, "layout should patch arrow when from/to is in customData");
-  assert.equal(arrowPatch?.startBinding, null);
-  assert.equal(arrowPatch?.endBinding, null);
+  assert.deepEqual(arrowPatch?.startBinding, { elementId: fromNode.id, focus: 0, gap: 1 });
+  assert.deepEqual(arrowPatch?.endBinding, { elementId: toNode.id, focus: 0, gap: 1 });
 });
