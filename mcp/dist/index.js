@@ -32,7 +32,7 @@ Core operating rules:
 2. Prefer intent APIs (add_node, connect, move, resize, style, patch_canvas, apply_intents) over raw JSON construction.
 3. On webhook triggers, use changed_element_ids + changed_elements/changed_elements_compact directly; avoid unnecessary round-trips.
 4. For compact trigger payloads, set compact_triggers: true in start_session.
-
+5. No webhook? Call get_pending_triggers() to drain queued canvas change events.
 Need full guidance/examples? Call get_server_instructions({ verbose: true }).`;
 const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidraw) for collaborative whiteboarding between agents and humans.
 
@@ -40,7 +40,8 @@ const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidra
 1. Call start_session() with your conversation identifier (e.g. your chat JID or channel ID) as session_id, and a webhook_url where canvas events should be POSTed. Set compact_triggers: true to reduce webhook payload size. This ensures triggers route back to the correct conversation.
 2. Use get_canvas() to read the current canvas as structured data (nodes, edges, zones, thought bubbles).
 3. Use the intent API to draw: add_node(), connect(), move(), resize(), style(), add_label(), delete_element(). No coordinates or JSON construction needed.
-4. Call layout() to auto-arrange nodes after adding them.
+4. Always call layout() as the final step of diagram construction. Use TB for hierarchies/org charts, LR for pipelines and sequences.
+5. When adding nodes to an existing canvas, call get_canvas_summary() first to understand current layout, then use near: to anchor new nodes near existing content.
 
 ## Drawing (Intent API)
 Use these tools instead of update_canvas for most operations — they're 10-20x smaller payloads and require no coordinate math:
