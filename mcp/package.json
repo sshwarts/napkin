@@ -1,9 +1,32 @@
 {
   "name": "napkin-mcp",
   "version": "0.1.0",
-  "description": "Napkin MCP server — canvas-aware agent interface",
+  "mcpName": "io.github.sshwarts/napkin",
+  "description": "Napkin MCP server — canvas-aware agent interface for collaborative whiteboarding",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "napkin-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sshwarts/napkin.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://github.com/sshwarts/napkin",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "whiteboard",
+    "canvas",
+    "excalidraw",
+    "napkin",
+    "collaborative"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

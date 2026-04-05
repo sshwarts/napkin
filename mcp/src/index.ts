@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @file Napkin MCP server entry point.
  *
