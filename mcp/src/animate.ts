@@ -118,8 +118,8 @@ export function animateElement(
         resolve({ error: `Element "${elementId}" disappeared during animation.` });
         return;
       }
-      // Build the full element with interpolated properties overlaid.
-      const patch: Record<string, unknown> = { ...currentEl };
+      // Build a minimal patch with only the animated properties.
+      const patch: Record<string, unknown> = { id: elementId };
       for (const { prop, from, to } of numericAnims) {
         patch[prop] = from + (to - from) * easedT;
       }
@@ -142,10 +142,7 @@ export function animateElement(
         }
         clearInterval(timer);
       }
-      // Bump version so Excalidraw recognizes the change.
-      patch.version = ((element.version as number) ?? 1) + frame;
-      patch.updated = Date.now();
-      wss.updateCanvas([patch as ExcalidrawElement], originSessionId);
+      wss.patchCanvas([patch], originSessionId);
       if (frame >= totalFrames) {
         resolve({ ok: true });
       }

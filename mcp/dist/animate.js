@@ -98,8 +98,8 @@ export function animateElement(wss, elementId, target, durationMs, easing = "lin
                 resolve({ error: `Element "${elementId}" disappeared during animation.` });
                 return;
             }
-            // Build the full element with interpolated properties overlaid.
-            const patch = { ...currentEl };
+            // Build a minimal patch with only the animated properties.
+            const patch = { id: elementId };
             for (const { prop, from, to } of numericAnims) {
                 patch[prop] = from + (to - from) * easedT;
             }
@@ -122,10 +122,7 @@ export function animateElement(wss, elementId, target, durationMs, easing = "lin
                 }
                 clearInterval(timer);
             }
-            // Bump version so Excalidraw recognizes the change.
-            patch.version = (element.version ?? 1) + frame;
-            patch.updated = Date.now();
-            wss.updateCanvas([patch], originSessionId);
+            wss.patchCanvas([patch], originSessionId);
             if (frame >= totalFrames) {
                 resolve({ ok: true });
             }

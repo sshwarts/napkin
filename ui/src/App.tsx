@@ -53,23 +53,35 @@ function restoreIncoming(incoming: ExcalidrawElement[]): ExcalidrawElement[] {
       bindingsById.set(el.id, { start: arrow.startBinding, end: arrow.endBinding });
     }
   }
+  // 2b. Capture boundElements before restore clobbers them.
+  const boundById = new Map<string, readonly { id: string; type: string }[]>();
+  for (const el of incoming) {
+    if (el.boundElements && el.boundElements.length > 0) {
+      boundById.set(el.id, el.boundElements);
+    }
+  }
   // 3. Restore with repairBindings (required to enable refreshDimensions).
   const restored = restoreElements(incoming, null, {
     repairBindings: true,
     refreshDimensions: true,
   }) as ExcalidrawElement[];
-  // 4. Patch back arrow bindings and re-anchor standalone text.
+  // 4. Patch back arrow bindings, boundElements, and re-anchor standalone text.
   return restored.map((el) => {
+    let patched = el;
+    const bound = boundById.get(el.id);
+    if (bound) {
+      patched = { ...patched, boundElements: bound as any };
+    }
     const bindings = bindingsById.get(el.id);
     if (bindings) {
-      const arrow = el as ArrowEl;
-      return { ...el, startBinding: bindings.start ?? arrow.startBinding, endBinding: bindings.end ?? arrow.endBinding };
+      const arrow = patched as ArrowEl;
+      return { ...patched, startBinding: bindings.start ?? arrow.startBinding, endBinding: bindings.end ?? arrow.endBinding };
     }
     const center = centerById.get(el.id);
     if (center) {
-      return { ...el, x: center.cx - el.width / 2, y: center.cy - el.height / 2 };
+      return { ...patched, x: center.cx - patched.width / 2, y: center.cy - patched.height / 2 };
     }
-    return el;
+    return patched;
   });
 }
 

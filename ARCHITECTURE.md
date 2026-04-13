@@ -494,9 +494,10 @@ This was initially misdiagnosed as a text font measurement issue. The visual rou
 
 Excalidraw elements created via `updateScene` (the MCP server's write path) don't trigger browser-side font measurement. Text elements render with incorrect bounding boxes until clicked, which forces Excalidraw to recalculate.
 
-**Fix (browser-side):** `App.tsx` runs all incoming elements through `restoreElements` with `refreshDimensions: true` before calling `updateScene`. This triggers `refreshTextDimensions` which measures text with the browser's canvas context. Two corrections are applied after restore:
+**Fix (browser-side):** `App.tsx` runs all incoming elements through `restoreElements` with `refreshDimensions: true` before calling `updateScene`. This triggers `refreshTextDimensions` which measures text with the browser's canvas context. Three corrections are applied after restore:
 
 - **Arrow bindings** — `repairBindings` must be enabled (it gates `refreshDimensions`), but it nullifies bindings to elements not in the incoming set. Arrow bindings are saved before restore and patched back after.
+- **boundElements** — `repairBindings` also wipes the parent→child reference (`boundElements`) when an element arrives in a patch without its bound children (e.g. a shape animated without its text label). The contained text becomes invisible even though it still exists with its `containerId` intact. `boundElements` arrays are saved before restore and patched back after, using the same pattern as arrow bindings.
 - **Standalone text position** — `refreshTextDimensions` shifts x/y when dimensions change. The server's intended center point (cx, cy) is captured before restore and used to re-anchor the text after dimensions are corrected.
 
 **Fix (server-side):** Arrow labels in `intent.ts` now use `estimateTextWidth` for initial width instead of a hardcoded 80px, reducing the delta between server estimate and browser measurement.
