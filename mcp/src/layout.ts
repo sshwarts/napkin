@@ -13,8 +13,37 @@ import { analyzeCanvas } from "./spatial.js";
 import { resolveArrowGeometry } from "./intent.js";
 
 const LAYOUT_MARGIN = 50;
+const RANKSEP = 120;
+const NODESEP = 60;
 
 type LayoutStyle = "tree" | "hierarchy" | "LR" | "TB";
+
+interface ZonedNode {
+  id: string;
+  zone: string;
+  row: number;
+  el: ExcalidrawElement;
+}
+
+function extractZonedNodes(
+  nodeIds: string[],
+  elemById: Map<string, ExcalidrawElement>
+): ZonedNode[] {
+  const out: ZonedNode[] = [];
+  for (const id of nodeIds) {
+    const el = elemById.get(id);
+    if (!el) continue;
+    const cd = el.customData;
+    if (typeof cd !== "object" || cd === null) continue;
+    const rec = cd as Record<string, unknown>;
+    const zone = typeof rec.zone === "string" ? rec.zone : undefined;
+    const row = typeof rec.row === "number" && Number.isFinite(rec.row) ? rec.row : undefined;
+    if (zone !== undefined && row !== undefined) {
+      out.push({ id, zone, row, el });
+    }
+  }
+  return out;
+}
 
 /**
  * Auto-layout the canvas using Dagre.
@@ -35,8 +64,8 @@ export function layoutCanvas(
   const rankdir = (style === "LR" || style === "tree") ? "LR" : "TB";
   g.setGraph({
     rankdir,
-    nodesep: 60,
-    ranksep: 120,
+    nodesep: NODESEP,
+    ranksep: RANKSEP,
     marginx: LAYOUT_MARGIN,
     marginy: LAYOUT_MARGIN,
   });
@@ -56,6 +85,30 @@ export function layoutCanvas(
   }
   // Run layout.
   dagre.layout(g);
+  // Zone snap: override the rank-axis coordinate of zoned nodes so that
+  // nodes sharing a row number share a rank (row in TB, column in LR),
+  // independent of Dagre's edge-derived ranking. Cross-axis is kept from
+  // Dagre to preserve connectivity-based ordering within the row.
+  const zonedNodes = extractZonedNodes(g.nodes(), elemById);
+  if (zonedNodes.length > 0) {
+    const maxH = Math.max(...zonedNodes.map((z) => z.el.height));
+    const maxW = Math.max(...zonedNodes.map((z) => z.el.width));
+    if (rankdir === "TB") {
+      const bandH = RANKSEP + maxH;
+      for (const { id, row } of zonedNodes) {
+        const ln = g.node(id);
+        if (!ln) continue;
+        ln.y = LAYOUT_MARGIN + maxH / 2 + row * bandH;
+      }
+    } else {
+      const bandW = RANKSEP + maxW;
+      for (const { id, row } of zonedNodes) {
+        const ln = g.node(id);
+        if (!ln) continue;
+        ln.x = LAYOUT_MARGIN + maxW / 2 + row * bandW;
+      }
+    }
+  }
   // Apply positions via patchCanvas.
   const patches: Array<Record<string, unknown>> = [];
   for (const nodeId of g.nodes()) {

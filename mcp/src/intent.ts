@@ -210,7 +210,9 @@ export function addNode(
   style?: Record<string, unknown>,
   near?: string,
   metadata?: Record<string, unknown>,
-  originSessionId?: string
+  originSessionId?: string,
+  zone?: string,
+  row?: number
 ): string {
   const elements = wss.getCanvasElements();
   const nodeId = genId();
@@ -260,7 +262,12 @@ export function addNode(
     locked: false,
     startBinding: null,
     endBinding: null,
-    ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
+    ...(() => {
+      const customData: Record<string, unknown> = { ...(metadata ?? {}) };
+      if (zone !== undefined) customData.zone = zone;
+      if (row !== undefined) customData.row = row;
+      return Object.keys(customData).length > 0 ? { customData } : {};
+    })(),
   };
   const textEl: ExcalidrawElement = {
     id: textId,

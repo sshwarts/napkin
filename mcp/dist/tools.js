@@ -501,15 +501,17 @@ export function registerTools(server, wss, sessions) {
         };
     });
     // --- Intent API (high-level drawing tools) ---
-    server.tool("add_node", "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID. Optional metadata is stored as customData (invisible in UI, returned in get_canvas). Conventions: intent, notes, status (wip|review|done|parking_lot), owner.", {
+    server.tool("add_node", "Add a labeled node to the canvas. Server handles placement — no coordinates needed. Returns the new element ID. Optional metadata is stored as customData (invisible in UI, returned in get_canvas). Conventions: intent, notes, status (wip|review|done|parking_lot), owner. Optional zone/row form swimlanes that layout() honors: nodes sharing the same row number are placed on the same rank (row in TB, column in LR), regardless of edge structure. Unzoned nodes fall back to natural Dagre placement.", {
         label: z.string().describe("Text label for the node"),
         shape: z.enum(["rectangle", "ellipse", "diamond"]).optional().describe("Shape type (default: rectangle)"),
         style: z.record(z.unknown()).optional().describe("Style overrides: color, fill/background, opacity, strokeStyle, strokeWidth"),
         near: z.string().optional().describe("ID of an element to place the new node near"),
         metadata: z.record(z.unknown()).optional().describe("Non-visual metadata stored as customData. Conventions: intent, notes, status (wip|review|done|parking_lot), owner"),
+        zone: z.string().optional().describe("Swimlane name — nodes sharing the same zone+row share a rank during layout(). Implicit: no need to pre-declare."),
+        row: z.number().int().optional().describe("Row index for this node's zone (0 = topmost in TB, leftmost in LR). Gaps produce proportional spacing. Required if zone is set."),
         session_id: z.string().optional().describe("Originating session ID for webhook echo suppression."),
-    }, async ({ label, shape, style, near, metadata, session_id }) => {
-        const id = addNode(wss, label, shape, style, near, metadata, resolveOriginSessionId(session_id));
+    }, async ({ label, shape, style, near, metadata, zone, row, session_id }) => {
+        const id = addNode(wss, label, shape, style, near, metadata, resolveOriginSessionId(session_id), zone, row);
         return { content: [{ type: "text", text: `Created node "${label}" (${id})` }] };
     });
     server.tool("connect", "Connect two nodes with an arrow. Server computes binding points. Optionally add a label on the arrow.", {

@@ -168,7 +168,7 @@ function applyStyle(style) {
 /**
  * Add a labeled node to the canvas. Server handles placement.
  */
-export function addNode(wss, label, shape, style, near, metadata, originSessionId) {
+export function addNode(wss, label, shape, style, near, metadata, originSessionId, zone, row) {
     const elements = wss.getCanvasElements();
     const nodeId = genId();
     const textId = genId();
@@ -206,7 +206,14 @@ export function addNode(wss, label, shape, style, near, metadata, originSessionI
         locked: false,
         startBinding: null,
         endBinding: null,
-        ...(metadata && Object.keys(metadata).length > 0 ? { customData: metadata } : {}),
+        ...(() => {
+            const customData = { ...(metadata ?? {}) };
+            if (zone !== undefined)
+                customData.zone = zone;
+            if (row !== undefined)
+                customData.row = row;
+            return Object.keys(customData).length > 0 ? { customData } : {};
+        })(),
     };
     const textEl = {
         id: textId,

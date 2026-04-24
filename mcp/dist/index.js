@@ -46,7 +46,7 @@ const SERVER_INSTRUCTIONS_VERBOSE = `Napkin is a shared visual canvas (Excalidra
 
 ## Drawing (Intent API)
 Use these tools instead of update_canvas for most operations — they're 10-20x smaller payloads and require no coordinate math:
-• **add_node(label, shape?, style?, near?, metadata?)** — creates a labeled node, server finds open space. Use near: existing_node_id when adding to an existing canvas — without it, nodes are placed in open space, typically to the right of existing content. Optional metadata stored as customData (invisible in UI, returned in get_canvas).
+• **add_node(label, shape?, style?, near?, zone?, row?, metadata?)** — creates a labeled node, server finds open space. Use near: existing_node_id when adding to an existing canvas — without it, nodes are placed in open space, typically to the right of existing content. zone and row (both required together) — pins the node to an explicit layout row independent of DAG structure. Nodes sharing the same zone+row are placed in the same rank band by layout(). Use for shared infrastructure nodes (databases, event buses) that connect to multiple subtrees and would otherwise be misplaced by Dagre. Row numbers are absolute integers; sparse rows (e.g. row=0 and row=2) produce proportional spacing. Optional metadata stored as customData (invisible in UI, returned in get_canvas).
 • **connect(from_id, to_id, label?)** — creates an arrow with proper bindings. Arrow labels go here — do NOT create a separate text element to annotate a connection.
 • **move(id, dx, dy)** — relative offset, moves bound text too
 • **resize(id, width?, height?)** — maintains center position
@@ -55,7 +55,7 @@ Use these tools instead of update_canvas for most operations — they're 10-20x 
 • **delete_element(id)** — removes element and bound text
 • **patch_canvas(patches)** — modify any element field without resending the full definition. Pass patches as an array of objects (not a JSON-encoded string)
 • **apply_intents(operations, cancel_on_error?, broadcast_mode?)** — execute ordered intent/write ops in one call. Supports $ref:name.field substitutions from prior outputs. Canonical pattern: batch all node/connect/add_label operations with layout as the final op. Any canvas call outside the batch (after apply_intents returns) will not be repositioned by layout.
-• **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge. TB (default) for hierarchies/org charts, LR for pipelines/flows/sequences. Must be the last op inside apply_intents — not a separate call after the batch.
+• **layout(style?)** — auto-arrange all nodes and reposition arrows edge-to-edge. TB (default) for hierarchies/org charts, LR for pipelines/flows/sequences. Must be the last op inside apply_intents — not a separate call after the batch. Respects zone/row assignments — zoned nodes are snapped to absolute row positions after Dagre runs, keeping Dagre's cross-axis ordering within each row. Unzoned nodes fall through to natural Dagre placement.
 
 Only use update_canvas() for new elements not covered by add_node/connect. Pass elements as an array of objects (not a JSON-encoded string). Always send complete element definitions to update_canvas — partial objects break elements.
 

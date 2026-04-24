@@ -27,7 +27,7 @@ export { genIndex };
 /**
  * Add a labeled node to the canvas. Server handles placement.
  */
-export declare function addNode(wss: CanvasWebSocketServer, label: string, shape?: string, style?: Record<string, unknown>, near?: string, metadata?: Record<string, unknown>, originSessionId?: string): string;
+export declare function addNode(wss: CanvasWebSocketServer, label: string, shape?: string, style?: Record<string, unknown>, near?: string, metadata?: Record<string, unknown>, originSessionId?: string, zone?: string, row?: number): string;
 /**
  * Connect two nodes with an arrow. Server computes binding points.
  */

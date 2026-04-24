@@ -95,8 +95,10 @@ export function analyzeCanvas(elements) {
         for (const other of liveElements) {
             if (other.id === shape.id)
                 continue;
-            // Skip text labels that belong to this container.
-            if (other.type === "text" && other.containerId === shape.id)
+            // Skip any bound text — it's a label on some element (this container,
+            // another node, or an arrow passing through) and doesn't count as
+            // semantic "contents" of a zone.
+            if (other.type === "text" && other.containerId != null)
                 continue;
             if (isContainedIn(other, shape)) {
                 containedIds.push(other.id);
