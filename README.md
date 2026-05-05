@@ -233,6 +233,21 @@ apply_intents([
 
 Ref substitution (`$ref:n1.id`) lets later ops use outputs from earlier ones — no round-trips needed to get IDs. A 10-node diagram with connections and layout ships in a single MCP call.
 
+### Swimlanes: `zone` + `row`
+
+Pin nodes to explicit layout rows independent of edge structure. Nodes sharing the same `zone` and `row` are snapped to the same rank band after Dagre runs — useful for shared infrastructure (databases, event buses) that should sit on a common row across subtrees:
+
+```
+add_node("API",         zone: "main", row: 0)
+add_node("Worker",      zone: "main", row: 0)
+add_node("Postgres",    zone: "main", row: 1)   # shared infra row
+connect("API", "Postgres")
+connect("Worker", "Postgres")
+layout("TB")
+```
+
+Row index is the rank axis (top-to-bottom in `TB`, left-to-right in `LR`). Unzoned nodes fall back to natural Dagre placement.
+
 ### Path Traversal: `trace_path`
 
 Find flows through the graph without manual graph walking:
@@ -343,12 +358,13 @@ When the napkin MCP server is available, you have a shared Excalidraw whiteboard
 | `get_canvas_diff` | Elements changed since a timestamp |
 | `get_pending_triggers` | Poll for triggers (pull mode) |
 | `trace_path` | Traverse graph from a node, with optional metadata filtering |
+| `get_server_instructions` | Compact or verbose server-side guidance for agents |
 
 ### Write
 | Tool | Purpose |
 |------|---------|
 | `apply_intents` | Execute ordered batch of operations in one call |
-| `add_node` | Add labeled node — server handles placement |
+| `add_node` | Add labeled node — server handles placement. Optional `zone`+`row` pin nodes to a shared layout rank (see Swimlanes). |
 | `connect` | Connect nodes with an arrow |
 | `move` | Move element by offset (dx, dy) |
 | `resize` | Resize element, center preserved |
